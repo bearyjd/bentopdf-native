@@ -13,14 +13,18 @@ own license; verify versions in the upstream lockfile at build time):
   - BentoPDF ................ AGPL-3.0
   - PyMuPDF ................. AGPL-3.0
   - Ghostscript ............. AGPL-3.0
-  - CoherentPDF (CPDF) ...... AGPL-3.0 (non-commercial/commercial dual)
+  - CoherentPDF (CPDF) ...... AGPL-3.0 per upstream README (verify at release)
   - Tesseract.js / tessdata . Apache-2.0
-  - LibreOffice (WASM) ...... MPL-2.0 / LGPL (to be confirmed per release)
+  - LibreOffice (WASM) ...... via @matbee/libreoffice-converter; license UNVERIFIED
+  - bentopdf-pdfium, bentopdf-viewer (vendor/ tarballs) ... license UNVERIFIED
   - Electron ................ MIT
   - Capacitor ............... MIT
 
-Explicitly excluded: vendor/hyper-compress-wasm (separately licensed by the
-BentoPDF authors; not redistributed here).
+Explicitly excluded: hyper-compress-wasm and Kura (separately licensed by the
+BentoPDF authors; not redistributed here). Upstream imports hyper-compress-wasm
+in compress.ts, so excluding it requires a patch (see docs/ROADMAP.md, M1).
+
+No release artifact ships until every UNVERIFIED line above is resolved.
 
 Corresponding source for any distributed artifact is this repository at the
 matching tag plus the pinned upstream BentoPDF tag recorded in UPSTREAM_VERSION.
