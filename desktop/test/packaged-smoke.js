@@ -40,7 +40,9 @@ async function until(fn, ms, what) {
   }
 }
 
-const appArgs = ['--ozone-platform=headless', '--remote-debugging-port=0', `--user-data-dir=${profile}`];
+// SMOKE_EXTRA_ARGS exists only for negative controls (e.g. --no-sandbox must make this test fail).
+const extra = (process.env.SMOKE_EXTRA_ARGS || '').split(' ').filter(Boolean);
+const appArgs = ['--ozone-platform=headless', '--remote-debugging-port=0', `--user-data-dir=${profile}`, ...extra];
 const launch = (files) => {
   const isImage = target.endsWith('.AppImage');
   const args = [...(isImage ? ['--appimage-extract-and-run'] : []), ...appArgs, ...files];
@@ -125,7 +127,8 @@ async function main() {
 
     // Sandbox: every renderer must be seccomp-filtered, no-new-privs, capability-free, in its own user namespace.
     const pids = descendants(first.child.pid);
-    const cmd = (pid) => { try { return proc(pid, 'cmdline').split('\0'); } catch { return []; } };
+    // Chromium rewrites argv of forked children into one space-joined string, so split on both.
+    const cmd = (pid) => { try { return proc(pid, 'cmdline').split(/[\0 ]/).filter(Boolean); } catch { return []; } };
     const renderers = pids.filter((pid) => cmd(pid).includes('--type=renderer'));
     check('at least one renderer process found', renderers.length > 0, `pids ${renderers.join(',')}`);
     const browserPid = pids.find((pid) => cmd(pid).some((a) => /bentopdf-native$/.test(a)) && !cmd(pid).some((a) => a.startsWith('--type=')));
@@ -135,7 +138,7 @@ async function main() {
       const caps = statusField(pid, 'CapEff');
       const userNs = fs.readlinkSync(`/proc/${pid}/ns/user`);
       const browserNs = browserPid ? fs.readlinkSync(`/proc/${browserPid}/ns/user`) : '';
-      check(`renderer ${pid} sandboxed`, seccomp === '2' && nnp === '1' && /^0+$/.test(caps), `Seccomp=${seccomp} NoNewPrivs=${nnp} CapEff=${caps} userns=${userNs === browserNs ? 'shared-with-browser (setuid sandbox)' : 'separate'}`);
+      check(`renderer ${pid} sandboxed`, seccomp === '2' && nnp === '1' && /^0+$/.test(caps), `Seccomp=${seccomp} NoNewPrivs=${nnp} CapEff=${caps} userns=${userNs === browserNs ? 'shared-with-browser' : 'separate'}`);
     }
     const allCmd = pids.flatMap(cmd);
     check('no --no-sandbox on any process', !allCmd.includes('--no-sandbox'));
@@ -150,8 +153,9 @@ async function main() {
     // Second instance forwards its file to the first (single-instance lock).
     await cdp.js('window.__opened = []; window.bentoDesktop.onFileOpened((f) => window.__opened.push(f.name)); true');
     const second = launch([pdfB]);
-    const code = await until(() => second.child.exitCode !== null && second.child.exitCode, 60000, 'second instance exit').catch(() => 'timeout');
-    check('second instance exits and forwards its PDF', await until(() => cdp.js('window.__opened.includes("second.pdf")'), 20000, 'forwarded file').catch(() => false), `exit=${code}`);
+    const exited = await until(() => second.child.exitCode !== null && { code: second.child.exitCode }, 60000, 'second instance exit').catch(() => ({ code: 'timeout' }));
+    check('second instance exits cleanly', exited.code === 0, `exit=${exited.code}`);
+    check('second instance forwarded its PDF to the first', await until(() => cdp.js('window.__opened.includes("second.pdf")'), 20000, 'forwarded file').catch(() => false));
     try { process.kill(-second.child.pid, 'SIGKILL'); } catch { /* gone */ }
   } finally {
     try { process.kill(-first.child.pid, 'SIGTERM'); } catch { /* gone */ }
