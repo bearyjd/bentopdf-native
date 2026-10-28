@@ -101,8 +101,9 @@ anything not proven says NOT VERIFIED.
   installed Flatpak. Negative control: `--no-sandbox` makes the test fail
   (`Seccomp: 0`). Hosts without user namespaces: hardened AppRun refuses to
   start with a message (simulated by a failing `unshare`, not on a real
-  AppArmor-restricted Ubuntu: NOT VERIFIED there). deb/rpm setuid
-  `chrome-sandbox` path: NOT VERIFIED (cannot install here).
+  AppArmor-restricted Ubuntu: NOT VERIFIED there). deb/rpm: the postinst (read from the built packages) sets
+  `chrome-sandbox` to 4755 only when `unshare --user` fails at install time,
+  otherwise 0755; installing and running that path is NOT VERIFIED (cannot install here).
 - [x] Electron fuses: RunAsNode off, NODE_OPTIONS off, inspect arguments off,
   OnlyLoadAppFromAsar on, cookie encryption on (plus asar-integrity on,
   file-protocol privileges off). `desktop/tools/check-fuses.js` reads the
@@ -114,7 +115,7 @@ anything not proven says NOT VERIFIED.
 - [x] `BENTO_DIST` / `BENTO_TRANSPORT` and any other environment overrides
   disabled in release: static check of the extracted `main.js` in every
   artifact plus the AppImage and Flatpak smoke runs with hostile values set
-  (Flatpak does not forward the caller's environment, so that run proves less).
+  (`flatpak run` forwards the variable; checked with `sh -c 'echo $BENTO_DIST'`).
 - [x] Desktop entry, MIME type and file association for `.pdf`: in all four
   formats (`verify-artifact.sh` for AppImage/deb/rpm, `desktop-file-validate` and
   `appstreamcli validate` for the Flatpak files). End-to-end open-with is proven

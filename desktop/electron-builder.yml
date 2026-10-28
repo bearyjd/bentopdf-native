@@ -53,7 +53,7 @@ appImage:
 deb:
   executableArgs: ['--ozone-platform-hint=auto', '%f']
   depends: [libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils, libatspi2.0-0, libuuid1, libsecret-1-0]
-  # chrome-sandbox is made setuid root by electron-builder's postinst.
+  # postinst makes chrome-sandbox setuid root only where user namespaces are unavailable.
 rpm:
   executableArgs: ['--ozone-platform-hint=auto', '%f']
   # Fedora/RHEL package names (electron-builder's defaults are SUSE/Debian-ish).

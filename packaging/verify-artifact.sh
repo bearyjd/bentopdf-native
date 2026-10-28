@@ -39,6 +39,19 @@ case "$ART" in
   *) fail "unsupported artifact type: $ART" ;;
 esac
 
+# Maintainer scripts are not part of the extracted payload; read them from the package itself.
+SCRIPTS="$WORK/scripts"
+mkdir -p "$SCRIPTS"
+case "$ART" in
+  *.deb)
+    ctrl="$(ar t "$ART" | grep '^control\.tar' | head -n1)"
+    [ -n "$ctrl" ] || fail "no control.tar.* member in $ART"
+    ar p "$ART" "$ctrl" > "$WORK/$ctrl"
+    tar -x --no-same-owner -C "$SCRIPTS" -f "$WORK/$ctrl" ;;
+  *.rpm)
+    rpm -qp --scripts "$ART" > "$SCRIPTS/rpm-scripts.txt" ;;
+esac
+
 ASAR_PATH="$(find "$OUT" -path '*/resources/app.asar' -print -quit)"
 [ -n "$ASAR_PATH" ] || fail "no resources/app.asar found"
 RES="$(dirname "$ASAR_PATH")"
@@ -84,13 +97,19 @@ while IFS= read -r f; do
 done < <(find "$OUT" -type f \( -name '*.desktop' -o -name AppRun -o -name 'postinst' -o -name '*.sh' \) 2>/dev/null)
 pass "no --no-sandbox / devtools / inspect flags in desktop entries, launchers or app code"
 
+if [[ "$ART" != *.AppImage ]]; then
+  if grep -rEn -- '--no-sandbox|--disable-setuid-sandbox' "$SCRIPTS"; then fail "sandbox-off flag in a maintainer script"; fi
+  grep -rq 'chmod 4755' "$SCRIPTS" || fail "maintainer script does not set the setuid chrome-sandbox (needed where user namespaces are unavailable)"
+  pass "maintainer scripts: no sandbox-off flags; chrome-sandbox is made setuid root only when user namespaces are unavailable"
+fi
+
 DESKTOP="$(find "$OUT" -name '*.desktop' -print -quit)"
 if [ -n "$DESKTOP" ]; then
   grep -q '^MimeType=.*application/pdf' "$DESKTOP" || fail ".desktop lacks MimeType=application/pdf"
-  grep -Eq '^Exec=.* %[fFuU]' "$DESKTOP" || fail ".desktop Exec lacks a file field code"
+  grep -Eq '^Exec=.* %f$' "$DESKTOP" || fail ".desktop Exec does not end in the %f field code"
   grep -q '^Categories=Office;Utility;' "$DESKTOP" || fail ".desktop Categories is not Office;Utility;"
   grep -q '^StartupWMClass=' "$DESKTOP" || fail ".desktop lacks StartupWMClass"
-  pass "desktop entry: PDF MIME type, file field code, Office;Utility, StartupWMClass"
+  pass "desktop entry: PDF MIME type, Exec ... %f, Office;Utility, StartupWMClass"
 else
   fail "no .desktop file in the artifact"
 fi

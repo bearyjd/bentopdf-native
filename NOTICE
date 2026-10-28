@@ -33,7 +33,8 @@ installed package at the versions the build uses). They are NOT a legal review.
                                               rawcdn.githack.com; no licence file is fetched): NEEDS REVIEW
   - xlsx (SheetJS) 0.20.3 ................... Apache-2.0       [upstream package-lock.json "license"]
   - Other npm dependencies bundled by vite .. see upstream package-lock.json; not enumerated here: NEEDS REVIEW
-  - Electron 45.1.0 (desktop/ shell) ........ MIT             [LICENSE of the electron-v45.1.0-linux-x64 download, shipped as
+  - Electron 45.1.0 (desktop/ shell) ........ MIT             [LICENSE of the electron-v45.1.0-linux-x64 download ("Copyright (c) Electron contributors ...
+                                                              Permission is hereby granted, free of charge ..." = MIT text), shipped as
                                                               LICENSE.electron.txt inside every Linux artifact]
   - Chromium and its bundled third-party components (inside every packaged Electron build) ... a mix of licences,
                                               including LGPL parts. Their notices ship as LICENSES.chromium.html
