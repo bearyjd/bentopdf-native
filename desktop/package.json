@@ -1,0 +1,20 @@
+{
+  "name": "bentopdf-desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Minimal secure Electron shell serving the offline BentoPDF bundle",
+  "license": "AGPL-3.0-only",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test --test-concurrency=1 --test-timeout=1800000 \"test/*.test.js\"",
+    "lint": "eslint .",
+    "test:csp-smoke": "node --test --test-timeout=900000 test/csp-smoke.test.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "electron": "45.1.0",
+    "eslint": "10.1.0",
+    "globals": "17.4.0"
+  }
+}

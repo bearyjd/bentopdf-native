@@ -49,6 +49,13 @@ operates on the document in the active tab. Fully offline.
   re-flow editing parity with Acrobat, Acrobat-grade OCR editing, cloud
   features. Gap analysis lands in M3.
 
+## Open gates
+
+- [ ] **BLOCKING: M2 is not closed until a human confirms a VISIBLE window
+  renders** (`cd desktop && npm start`, open Merge PDF and OCR). Everything so
+  far ran headless only (`--ozone-platform=headless`); on the dev machine a real
+  Wayland window got 0 `requestAnimationFrame` frames.
+
 ## Milestones
 
 | M | Deliverable | Verified how |
@@ -63,3 +70,36 @@ operates on the document in the active tab. Fully offline.
 
 Each milestone ends with a diff summary and a commit on `main` of this repo.
 Signing keys/certs are never committed; env vars or CI secrets only.
+
+## M3 design notes
+
+- **Documents live in the main process.** A main-process document store plus a
+  per-tool adapter replaces the per-page hidden-input DOM hack
+  (`handoffToInput`) used in M2. Each tool gets a small adapter that takes
+  and returns documents by id, not a `File` pushed into whatever `<input>` the
+  page has. M2's handoff stays only as the fallback adapter.
+- **One `WebContentsView` per tab**, with separate partitions (or a deliberate,
+  documented decision to share one). Every view must re-prove, in a test:
+  `crossOriginIsolated`, the preload bridge, and the IPC sender checks (today
+  they are proven for a single window only).
+- **Cap live views and memory.** One LibreOffice run is about 1.7 GiB RSS
+  (docs/m2-findings.md); N tabs cannot each keep a live engine. Define a limit
+  and an eviction policy.
+
+## M4 entry criteria (do not start packaging before these have an answer)
+
+- Chromium sandbox strategy for AppImage and Flatpak. **No `--no-sandbox`.**
+  Prove the renderer is actually sandboxed in each artifact.
+- Electron fuses: RunAsNode off, NODE_OPTIONS off, inspect arguments off,
+  OnlyLoadAppFromAsar on, cookie encryption on.
+- asar vs unpacked decision for the WASM payloads (Range reads, size).
+- `BENTO_DIST` / `BENTO_TRANSPORT` and any other environment overrides disabled
+  in release (the entry point already ignores them when `app.isPackaged`; verify
+  in the artifact).
+- Desktop entry, MIME type and file association for `.pdf`.
+- Wayland flags (ozone platform selection) decided and tested.
+- Deliberately no auto-update; say so in the docs.
+- Ship Electron's `LICENSE` and `LICENSES.chromium.html`, and verify both are
+  inside the built artifact (see NOTICE).
+- `SOURCE.txt` provenance for the Electron binary (version and checksum).
+- AGPL corresponding-source offer reachable from Help/About.

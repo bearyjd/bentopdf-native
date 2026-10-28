@@ -1,0 +1,4 @@
+{
+  "comment": "Violations the smoke test tolerates. Each entry needs a reason; page '*' matches any page. Stale entries (matching nothing) fail the test. Empty on purpose: every one of the bundle's pages loads with zero violations.",
+  "entries": []
+}
