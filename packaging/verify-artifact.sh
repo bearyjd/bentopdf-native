@@ -79,7 +79,7 @@ else
         cp -a "$ctrl/." "$SCRIPTS/" ;;
       *.rpm)
         KIND=rpm
-        (umask 000 && cd "$OUT" && rpm2cpio "$ART" | cpio -idm --quiet --no-absolute-filenames)
+        (umask 022 && cd "$OUT" && rpm2cpio "$ART" | cpio -idm --quiet --no-absolute-filenames)
         rpm -qp --scripts "$ART" > "$SCRIPTS/rpm-scripts.txt" ;;
       *) fail "unsupported artifact type: $ART" ;;
     esac
@@ -190,7 +190,8 @@ while IFS= read -r d; do
   grep -Eq '^Exec=.* %f$' "$d" || fail "${d#"$OUT"/}: Exec does not end in %f"
   grep -q '^Categories=Office;Utility;' "$d" || fail "${d#"$OUT"/}: Categories is not Office;Utility;"
   grep -q '^StartupWMClass=' "$d" || fail "${d#"$OUT"/}: no StartupWMClass"
-  grep -q "^Exec=.*$EXE_NAME" "$d" || fail "${d#"$OUT"/}: Exec does not start $EXE_NAME"
+  if [ "$KIND" = appimage ]; then LAUNCH="AppRun"; else LAUNCH="$EXE_NAME"; fi
+  grep -q "^Exec=.*$LAUNCH" "$d" || fail "${d#"$OUT"/}: Exec does not start $LAUNCH"
   if grep -Eq -- '--no-sandbox|--disable-setuid-sandbox' "$d"; then fail "${d#"$OUT"/}: sandbox-off flag in Exec"; fi
 done < <(find "$PAYLOAD" -name '*.desktop' -not -path '*/resources/dist/*')
 [ "$DESKTOPS" -gt 0 ] || fail "no .desktop file in the artifact"
@@ -217,7 +218,7 @@ case "$KIND" in
     L="$PAYLOAD/bin/$EXE_NAME"
     [ -s "$L" ] || fail "flatpak launcher bin/$EXE_NAME missing"
     grep -q '^unset .*ELECTRON_DISABLE_SANDBOX.*ELECTRON_RUN_AS_NODE.*NODE_OPTIONS' "$L" || fail "flatpak launcher does not unset the sandbox-off / run-as-node environment"
-    grep -q 'zypak-wrapper' "$L" || fail "flatpak launcher does not use zypak-wrapper"
+    grep -q '^exec zypak-wrapper ' "$L" || fail "flatpak launcher does not use zypak-wrapper"
     [ -s "$FLATPAK_METADATA" ] || fail "flatpak metadata missing"
     sockets="$(sed -n 's/^sockets=//p' "$FLATPAK_METADATA")"
     shared="$(sed -n 's/^shared=//p' "$FLATPAK_METADATA")"
@@ -241,6 +242,15 @@ else
   [ "$(stat -c %a "$APP/chrome-sandbox")" = 755 ] || fail "chrome-sandbox payload mode is $(stat -c %a "$APP/chrome-sandbox"), want 755"
 fi
 pass "modes: 0 group/world-writable, 0 setuid/setgid; chrome-sandbox $([ "$KIND" = flatpak ] && echo absent || echo 0755 in the payload)"
+
+# The package's own file listing is checked too: extraction applies the umask and can hide modes.
+if [ -z "$TREE" ] && { [ "$KIND" = deb ] || [ "$KIND" = rpm ]; }; then
+  if [ "$KIND" = deb ]; then dpkg-deb -c "$ART" > "$WORK/listing.txt"; else rpm -qp --queryformat '[%{FILEMODES:perms} %{FILENAMES}\n]' "$ART" > "$WORK/listing.txt"; fi
+  [ -s "$WORK/listing.txt" ] || fail "empty package file listing"
+  BAD="$(awk '$1 !~ /^l/ && (substr($1,6,1)=="w" || substr($1,9,1)=="w" || substr($1,4,1) ~ /[sS]/ || substr($1,7,1) ~ /[sS]/) {n++} END {print n+0}' "$WORK/listing.txt")"
+  [ "$BAD" = 0 ] || fail "package listing has $BAD group/world-writable or setuid/setgid entr(ies)"
+  pass "package listing ($(wc -l < "$WORK/listing.txt") entries): no group/world-writable, setuid or setgid modes"
+fi
 
 # ---- fuses ------------------------------------------------------------------------------
 node "$ROOT/desktop/tools/check-fuses.js" "$EXE" >"$WORK/fuses.txt" || { cat "$WORK/fuses.txt"; fail "fuse state mismatch"; }

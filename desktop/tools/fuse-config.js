@@ -8,6 +8,7 @@ const EXPECTED_FUSES = Object.freeze({
   [FuseV1Options.RunAsNode]: false,
   [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
   [FuseV1Options.EnableNodeCliInspectArguments]: false,
+  // Harmless, but believed to be a no-op on Linux (docs/desktop-linux.md): not relied upon.
   [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
   [FuseV1Options.OnlyLoadAppFromAsar]: true,
   [FuseV1Options.EnableCookieEncryption]: true,

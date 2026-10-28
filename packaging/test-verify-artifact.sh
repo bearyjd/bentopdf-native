@@ -4,7 +4,7 @@
 # packaging/verify-artifact.sh FAILS. A positive control (the unmodified tree must pass)
 # runs first. Exit 0 only if every mutation was caught.
 #
-#   packaging/test-verify-artifact.sh [--deb F] [--rpm F] [--appimage F] [--flatpak DIR]
+#   packaging/test-verify-artifact.sh [--deb F] [--rpm F] [--appimage F] [--flatpak DIR | --no-flatpak]
 # Defaults: the newest files in desktop/release/ and packaging/flatpak/.build/app.
 # GATE=<script> runs a different gate (used to show what an older gate missed); it must
 # accept the same --tree/--kind/--scripts arguments.
@@ -13,13 +13,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GATE="${GATE:-$ROOT/packaging/verify-artifact.sh}"
 REL="$ROOT/desktop/release"
-DEB="" RPM="" IMG="" FLAT=""
+DEB="" RPM="" IMG="" FLAT="" WITH_FLATPAK=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --deb) DEB="$2"; shift ;;
     --rpm) RPM="$2"; shift ;;
     --appimage) IMG="$2"; shift ;;
     --flatpak) FLAT="$2"; shift ;;
+    --no-flatpak) WITH_FLATPAK=0 ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -30,7 +31,11 @@ newest() { find "$REL" -maxdepth 1 -name "$1" -print 2>/dev/null | sort | tail -
 [ -n "$IMG" ] || IMG="$(newest '*.AppImage')"
 [ -n "$FLAT" ] || FLAT="$ROOT/packaging/flatpak/.build/app"
 for f in "$DEB" "$RPM" "$IMG"; do [ -f "$f" ] || { echo "missing artifact: '$f'" >&2; exit 2; }; done
-[ -d "$FLAT/files" ] || { echo "missing flatpak build dir: $FLAT" >&2; exit 2; }
+if [ "$WITH_FLATPAK" = 1 ]; then
+  [ -d "$FLAT/files" ] || { echo "missing flatpak build dir: $FLAT (pass --no-flatpak to test without it)" >&2; exit 2; }
+fi
+KINDS="deb rpm appimage"
+[ "$WITH_FLATPAK" = 0 ] || KINDS="$KINDS flatpak"
 
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
@@ -57,13 +62,15 @@ mkdir -p "$T/base/deb" "$T/base/rpm" "$T/base/appimage"
 mkdir "$T/base/deb.scripts"
 dpkg-deb -e "$DEB" "$T/base/deb.ctl"
 cp -a "$T/base/deb.ctl/." "$T/base/deb.scripts/"
-(umask 000 && cd "$T/base/rpm" && rpm2cpio "$RPM" | cpio -idm --quiet --no-absolute-filenames)
+(umask 022 && cd "$T/base/rpm" && rpm2cpio "$RPM" | cpio -idm --quiet --no-absolute-filenames)
 mkdir "$T/base/rpm.scripts"
 rpm -qp --scripts "$RPM" > "$T/base/rpm.scripts/rpm-scripts.txt"
 (umask 000 && cd "$T/base/appimage" && cp "$IMG" ./img && chmod +x ./img && ./img --appimage-extract >/dev/null && rm ./img)
-mkdir "$T/base/flatpak"
-cp -a "$FLAT/." "$T/base/flatpak/"
-for k in deb rpm appimage flatpak; do slim "$T/base/$k"; done
+if [ "$WITH_FLATPAK" = 1 ]; then
+  mkdir "$T/base/flatpak"
+  cp -a "$FLAT/." "$T/base/flatpak/"
+fi
+for k in $KINDS; do slim "$T/base/$k"; done
 mv "$T/base/appimage/squashfs-root" "$T/base/appimage.tree"
 rmdir "$T/base/appimage"
 mv "$T/base/appimage.tree" "$T/base/appimage"
@@ -106,10 +113,10 @@ attempt() { # name kind mutation-function [gate args]
 }
 
 # ---- positive controls -------------------------------------------------------------------------
-for k in deb rpm appimage flatpak; do
+for k in $KINDS; do
   if ! run_gate "$k" "$T/base/$k"; then printf '%s\n' "$GATE_OUT" | tail -5 >&2; echo "positive control failed: the unmodified $k tree must pass" >&2; exit 1; fi
 done
-echo "positive controls: unmodified deb, rpm, appimage and flatpak trees pass the gate"
+echo "positive controls: unmodified $KINDS trees pass the gate"
 
 # ---- mutations -----------------------------------------------------------------------------------
 m_rm_chromium_lic() { rm "$(appdir "$1")/LICENSES.chromium.html"; }
@@ -125,7 +132,7 @@ m_source_no_tagline() { sed -i '/release tag:/d' "$(resdir "$1")/SOURCE.txt"; }
 m_source_no_upstream() { sed -i "s/$(tr -d '[:space:]' < "$ROOT/UPSTREAM_COMMIT")/deadbeef/" "$(resdir "$1")/SOURCE.txt"; }
 m_flip_fuse() {
   node -e "
-    const { flipFuses, FuseVersion, FuseV1Options } = require('$ROOT/desktop/node_modules/@electron/fuses');
+    const { flipFuses, FuseVersion, FuseV1Options } = require(require.resolve('@electron/fuses', { paths: ['$ROOT/desktop'] }));
     flipFuses(process.argv[1], { version: FuseVersion.V1, [FuseV1Options.RunAsNode]: true }).catch((e) => { console.error(e); process.exit(1); });
   " "$(appdir "$1")/$EXE_NAME"
 }
@@ -192,7 +199,7 @@ attempt_scripts() { # name kind file-in-scripts sed-expr|DELETE
   cp -a "$bak" "$s"
 }
 
-for k in deb rpm appimage flatpak; do
+for k in $KINDS; do
   attempt "remove LICENSES.chromium.html" $k m_rm_chromium_lic
   attempt "empty LICENSES.chromium.html" $k m_empty_chromium_lic
   attempt "remove LICENSE.electron.txt" $k m_rm_electron_lic
@@ -239,14 +246,16 @@ attempt "stock electron-builder AppRun" appimage m_apprun_stock
 attempt "--no-sandbox added to the .desktop Exec" deb m_desktop_no_sandbox
 attempt "--no-sandbox added to the .desktop Exec" rpm m_desktop_no_sandbox
 attempt "--no-sandbox added to the .desktop Exec" appimage m_desktop_no_sandbox
-attempt "--no-sandbox added to the .desktop Exec" flatpak m_desktop_no_sandbox
-attempt "flatpak payload ships chrome-sandbox" flatpak m_flatpak_add_sandbox
-attempt "flatpak grants the plain x11 socket" flatpak m_flatpak_x11
-attempt "flatpak does not remove the x11 socket" flatpak m_flatpak_no_nosocket
-attempt "flatpak grants network" flatpak m_flatpak_network
-attempt "flatpak grants a filesystem" flatpak m_flatpak_fs
-attempt "flatpak launcher stops unsetting dangerous env" flatpak m_flatpak_launcher_unset
-attempt "flatpak launcher without zypak-wrapper" flatpak m_flatpak_launcher_nosandbox
+if [ "$WITH_FLATPAK" = 1 ]; then
+  attempt "--no-sandbox added to the .desktop Exec" flatpak m_desktop_no_sandbox
+  attempt "flatpak payload ships chrome-sandbox" flatpak m_flatpak_add_sandbox
+  attempt "flatpak grants the plain x11 socket" flatpak m_flatpak_x11
+  attempt "flatpak does not remove the x11 socket" flatpak m_flatpak_no_nosocket
+  attempt "flatpak grants network" flatpak m_flatpak_network
+  attempt "flatpak grants a filesystem" flatpak m_flatpak_fs
+  attempt "flatpak launcher stops unsetting dangerous env" flatpak m_flatpak_launcher_unset
+  attempt "flatpak launcher without zypak-wrapper" flatpak m_flatpak_launcher_nosandbox
+fi
 attempt "--release with unresolved NOTICE / no release tag" deb none --release
 
 attempt_scripts "postinst missing" deb postinst DELETE

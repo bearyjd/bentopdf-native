@@ -45,10 +45,11 @@ else
   install -m644 "$R/$ID.metainfo.xml" "$APP/share/metainfo/$ID.metainfo.xml"
   install -m644 ../icons/512x512.png "$APP/share/icons/hicolor/512x512/apps/$ID.png"
   # Keep in sync with finish-args in the manifest. No network, no filesystem access.
-  # --nosocket=x11 removes the plain x11 socket that the BaseApp grants; fallback-x11 still
-  # gives X11 only when no Wayland socket exists.
+  # build-finish adds a plain x11 socket for fallback-x11 on its own. --nosocket=x11 removes it, but ONLY
+  # when it comes after --socket=fallback-x11 (given before, fallback-x11 re-adds x11). Keep it last.
+  # Result: sockets=!x11;wayland;fallback-x11 (X11 only when there is no Wayland socket).
   flatpak build-finish .build/app --command="$EXE" \
-    --share=ipc --nosocket=x11 --socket=wayland --socket=fallback-x11 --device=dri
+    --share=ipc --socket=wayland --socket=fallback-x11 --device=dri --nosocket=x11
   flatpak build-export .build/repo .build/app
 fi
 flatpak build-bundle .build/repo ".build/$EXE-$VERSION.flatpak" "$ID"

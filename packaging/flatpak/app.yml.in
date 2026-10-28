@@ -12,10 +12,12 @@ command: @EXECUTABLE@
 separate-locales: false
 finish-args:
   - --share=ipc
-  - --nosocket=x11
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
+  # Must stay AFTER --socket=fallback-x11: build-finish adds x11 for fallback-x11 and
+  # --nosocket=x11 only removes it when it is processed last.
+  - --nosocket=x11
   # PDFs reach the app through the file chooser portal or file forwarding
   # (flatpak rewrites the %f in the .desktop Exec line to forward files through the
   # document portal).
