@@ -148,11 +148,13 @@ for f in src/main.js src/menu.js src/argv-policy.js src/open-file.js brand.json;
   [ -s "$WORK/asar/$f" ] || fail "app.asar lacks $f"
 done
 grep -q 'app.isPackaged ? {} : process.env' "$WORK/asar/src/main.js" || fail "main.js does not gate BENTO_* overrides on app.isPackaged"
-if grep -rn 'process\.env' "$WORK/asar/src" | grep -v 'src/main.js:.*overrides = app.isPackaged'; then
-  fail "process.env is read somewhere other than the guarded overrides line"
+if grep -rn 'process\.env' "$WORK/asar/src" | grep -Ev 'src/main.js:.*(overrides = app.isPackaged|process\.env\[name\])|src/argv-policy.js:.*env = process\.env'; then
+  fail "process.env is read somewhere other than the guarded overrides line, the sandbox-env refusal and the argv policy default"
 fi
 pass "BENTO_* overrides are read only through the app.isPackaged guard"
 
+grep -q "'ELECTRON_DISABLE_SANDBOX'" "$WORK/asar/src/main.js" && grep -q "'CHROME_DEVEL_SANDBOX'" "$WORK/asar/src/main.js" || fail "main.js does not refuse to start when ELECTRON_DISABLE_SANDBOX / CHROME_DEVEL_SANDBOX is set"
+grep -q 'app.exit(2)' "$WORK/asar/src/main.js" || fail "main.js has no exit-2 refusal"
 grep -q "require('./argv-policy')" "$WORK/asar/src/main.js" || fail "main.js does not load the argv policy"
 grep -q 'unsafeSwitches(process.argv)' "$WORK/asar/src/main.js" || fail "main.js does not check its own argv"
 grep -q "unsafeSwitches(argv)" "$WORK/asar/src/main.js" || fail "main.js does not check second-instance argv"
@@ -197,13 +199,21 @@ done < <(find "$PAYLOAD" -name '*.desktop' -not -path '*/resources/dist/*')
 [ "$DESKTOPS" -gt 0 ] || fail "no .desktop file in the artifact"
 pass "$DESKTOPS desktop entry(ies): PDF MIME type, Exec ... %f, Office;Utility, StartupWMClass"
 
+# Every launcher must unset all of these; the list is the policy (docs/desktop-linux.md).
+UNSET_VARS="ELECTRON_DISABLE_SANDBOX CHROME_DEVEL_SANDBOX ELECTRON_EXTRA_LAUNCH_ARGS ELECTRON_ENABLE_LOGGING ELECTRON_RUN_AS_NODE NODE_OPTIONS"
+check_unset() { # file label
+  local line v
+  line="$(grep -m1 '^unset ' "$1")" || fail "$2 has no unset line"
+  for v in $UNSET_VARS; do [[ " $line " == *" $v "* ]] || fail "$2 does not unset $v"; done
+}
+
 # ---- launchers and install scripts ----------------------------------------------
 case "$KIND" in
   appimage)
     [ -s "$OUT/AppRun" ] || fail "AppImage has no AppRun"
     grep -q '^refuse()' "$OUT/AppRun" || fail "AppImage does not use the hardened AppRun"
     grep -q 'NO_SANDBOX' "$OUT/AppRun" && fail "AppRun still contains the --no-sandbox fallback"
-    grep -q '^unset .*ELECTRON_DISABLE_SANDBOX.*ELECTRON_RUN_AS_NODE.*NODE_OPTIONS' "$OUT/AppRun" || fail "AppRun does not unset the sandbox-off / run-as-node environment"
+    check_unset "$OUT/AppRun" "AppRun"
     grep -q "exec \"\$HERE/$EXE_NAME\"" "$OUT/AppRun" || fail "AppRun does not exec $EXE_NAME"
     pass "AppImage uses the hardened AppRun (refuses without sandbox, unsets dangerous env)" ;;
   deb|rpm)
@@ -217,7 +227,7 @@ case "$KIND" in
   flatpak)
     L="$PAYLOAD/bin/$EXE_NAME"
     [ -s "$L" ] || fail "flatpak launcher bin/$EXE_NAME missing"
-    grep -q '^unset .*ELECTRON_DISABLE_SANDBOX.*ELECTRON_RUN_AS_NODE.*NODE_OPTIONS' "$L" || fail "flatpak launcher does not unset the sandbox-off / run-as-node environment"
+    check_unset "$L" "flatpak launcher"
     grep -q '^exec zypak-wrapper ' "$L" || fail "flatpak launcher does not use zypak-wrapper"
     [ -s "$FLATPAK_METADATA" ] || fail "flatpak metadata missing"
     sockets="$(sed -n 's/^sockets=//p' "$FLATPAK_METADATA")"

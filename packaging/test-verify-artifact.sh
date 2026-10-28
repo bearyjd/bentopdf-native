@@ -137,6 +137,8 @@ m_flip_fuse() {
   " "$(appdir "$1")/$EXE_NAME"
 }
 m_apprun_no_sandbox() { sed -i 's#^exec "\$HERE/\([^"]*\)" "\$@"#exec "$HERE/\1" --no-sandbox "$@"#' "$1/AppRun"; }
+m_apprun_short_unset() { sed -i 's/ CHROME_DEVEL_SANDBOX//' "$1/AppRun"; }
+m_apprun_short_unset_tail() { sed -i 's/ NODE_OPTIONS$//' "$1/AppRun"; }
 m_apprun_no_unset() { sed -i '/^unset /d' "$1/AppRun"; }
 m_apprun_stock() { printf '#!/bin/sh\nexec "$APPDIR/%s" --no-sandbox "$@"\n' "$EXE_NAME" > "$1/AppRun"; }
 m_desktop_no_sandbox() { find "$1" -name '*.desktop' -not -path '*/resources/*' -exec sed -i -E 's/^(Exec=.*) %f$/\1 --no-sandbox %f/' {} +; }
@@ -178,6 +180,9 @@ m_flatpak_no_nosocket() { sed -i 's/^sockets=!x11;/sockets=/' "$1/metadata"; }
 m_flatpak_network() { sed -i 's/^shared=\(.*\)/shared=network;\1/' "$1/metadata"; }
 m_flatpak_fs() { printf 'filesystems=home;\n' >> "$1/metadata"; }
 m_flatpak_launcher_unset() { sed -i '/^unset /d' "$1/files/bin/$EXE_NAME"; }
+m_flatpak_launcher_short_unset() { sed -i 's/ ELECTRON_ENABLE_LOGGING//' "$1/files/bin/$EXE_NAME"; }
+m_main_no_refusal() { asar_edit "$1" src/main.js "s/'CHROME_DEVEL_SANDBOX'/'X'/"; }
+m_main_no_refusal2() { asar_edit "$1" src/main.js "s/'ELECTRON_DISABLE_SANDBOX'/'X'/"; }
 m_flatpak_launcher_nosandbox() { sed -i 's#exec zypak-wrapper#exec#' "$1/files/bin/$EXE_NAME"; }
 none() { :; }
 
@@ -229,6 +234,8 @@ for k in $KINDS; do
   attempt "argv policy not applied to own argv" $k m_argv_policy_gone
   attempt "argv policy not applied to second-instance argv" $k m_argv_second_gone
   attempt "open-with magic-byte check removed" $k m_no_magic
+  attempt "main.js stops refusing CHROME_DEVEL_SANDBOX" $k m_main_no_refusal
+  attempt "main.js stops refusing ELECTRON_DISABLE_SANDBOX" $k m_main_no_refusal2
   attempt "forbidden flag literal inside app.asar" $k m_asar_no_sandbox_flag
   attempt "remove app.asar" $k m_rm_asar
   attempt "remove resources/dist/index.html" $k m_rm_dist_index
@@ -242,6 +249,8 @@ for k in deb rpm appimage; do
 done
 attempt "--no-sandbox added to AppRun" appimage m_apprun_no_sandbox
 attempt "AppRun no longer unsets ELECTRON_DISABLE_SANDBOX" appimage m_apprun_no_unset
+attempt "AppRun unset list loses CHROME_DEVEL_SANDBOX" appimage m_apprun_short_unset
+attempt "AppRun unset list loses NODE_OPTIONS" appimage m_apprun_short_unset_tail
 attempt "stock electron-builder AppRun" appimage m_apprun_stock
 attempt "--no-sandbox added to the .desktop Exec" deb m_desktop_no_sandbox
 attempt "--no-sandbox added to the .desktop Exec" rpm m_desktop_no_sandbox
@@ -254,6 +263,7 @@ if [ "$WITH_FLATPAK" = 1 ]; then
   attempt "flatpak grants network" flatpak m_flatpak_network
   attempt "flatpak grants a filesystem" flatpak m_flatpak_fs
   attempt "flatpak launcher stops unsetting dangerous env" flatpak m_flatpak_launcher_unset
+  attempt "flatpak unset list loses ELECTRON_ENABLE_LOGGING" flatpak m_flatpak_launcher_short_unset
   attempt "flatpak launcher without zypak-wrapper" flatpak m_flatpak_launcher_nosandbox
 fi
 attempt "--release with unresolved NOTICE / no release tag" deb none --release
