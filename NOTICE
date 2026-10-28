@@ -8,23 +8,44 @@ It is not affiliated with or endorsed by the BentoPDF project. Upstream
 source is fetched at build time and is not copied into this repository;
 all upstream copyright and license notices are preserved in that source.
 
-Third-party components that may appear in built artifacts (each retains its
-own license; verify versions in the upstream lockfile at build time):
-  - BentoPDF ................ AGPL-3.0
-  - PyMuPDF ................. AGPL-3.0
-  - Ghostscript ............. AGPL-3.0
-  - CoherentPDF (CPDF) ...... AGPL-3.0 per upstream README (verify at release)
-  - Tesseract.js / tessdata . Apache-2.0
-  - LibreOffice (WASM) ...... via @matbee/libreoffice-converter; license UNVERIFIED
-  - bentopdf-pdfium, bentopdf-viewer (vendor/ tarballs) ... license UNVERIFIED
-  - Electron ................ MIT
-  - Capacitor ............... MIT
+Third-party components that appear in the local-bundle build output.
+Licence identifiers below are copied from package metadata (the "license"
+field of each package's package.json, read from the npm tarball or the
+installed package at the versions the build uses). They are NOT a legal review.
+
+  - BentoPDF v2.8.10 ........................ AGPL-3.0-only   [upstream package.json "license"]
+  - bentopdf-pdfium (vendor/ tarball) ....... AGPL-3.0        [tarball package.json "license"; note: not "-only"/"-or-later"]
+  - bentopdf-viewer (vendor/ tarball) ....... MIT             [tarball package.json "license"]
+  - @bentopdf/pymupdf-wasm 0.11.16 .......... AGPL-3.0-only   [npm tarball package.json]
+  - @bentopdf/gs-wasm 0.1.1 (Ghostscript) ... AGPL-3.0-only   [npm tarball package.json]
+  - coherentpdf 2.5.5 (CPDF) ................ AGPL-3.0-or-later [npm tarball package.json]
+  - tesseract.js 7.0.0 ...................... Apache-2.0       [npm tarball package.json]
+  - tesseract.js-core 7.0.0 ................. Apache-2.0       [npm tarball package.json]
+  - @tesseract.js-data/<lang> 1.0.0 ......... MIT             [registry metadata for @tesseract.js-data/eng@1.0.0 only;
+                                                              the traineddata models derive from Tesseract's tessdata, whose
+                                                              own licence was not checked here: NEEDS REVIEW per language]
+  - @embedpdf/fonts-{latin,arabic,hebrew} 1.0.0 .. OFL-1.1    [npm tarball package.json; CJK packs not shipped by default]
+  - @matbee/libreoffice-converter 2.6.0 ..... MPL-2.0         [installed package.json "license"; this is the wrapper package
+                                                              only. The LibreOffice engine (soffice.wasm/.data in
+                                                              libreoffice-wasm/) is MPL-2.0 plus bundled third-party
+                                                              components with their own licences: NEEDS REVIEW]
+  - OCR font Noto Sans (ocr-fonts/) ......... licence NOT read from metadata (a single .ttf is fetched from
+                                              rawcdn.githack.com; no licence file is fetched): NEEDS REVIEW
+  - xlsx (SheetJS) 0.20.3 ................... Apache-2.0       [upstream package-lock.json "license"]
+  - Other npm dependencies bundled by vite .. see upstream package-lock.json; not enumerated here: NEEDS REVIEW
+  - Electron, Capacitor ..................... not part of any artifact yet (planned milestones); no licence read: NEEDS REVIEW when added
 
 Explicitly excluded: hyper-compress-wasm and Kura (separately licensed by the
-BentoPDF authors; not redistributed here). Upstream imports hyper-compress-wasm
-in compress.ts, so excluding it requires a patch (see docs/ROADMAP.md, M1).
+BentoPDF authors; not redistributed here). At upstream v2.8.10 no source file
+imports hyper-compress-wasm (grep of src/ and package.json/package-lock.json
+finds none); only the kura.html and hyper-compress.html marketing pages exist,
+and scripts/build-local.sh deletes them from the bundle and fails the build if
+they or the string "hyper-compress-wasm" reappear (scripts/check-dist.sh).
+Links to those pages from navbar/legal pages are not removed.
 
-No release artifact ships until every UNVERIFIED line above is resolved.
+No release artifact ships until every NEEDS REVIEW line above is resolved.
 
-Corresponding source for any distributed artifact is this repository at the
-matching tag plus the pinned upstream BentoPDF tag recorded in UPSTREAM_VERSION.
+Corresponding source for any distributed artifact: this repository at the
+commit recorded in the bundle's SOURCE.txt, plus the pinned upstream BentoPDF
+tag and commit recorded in UPSTREAM_VERSION and UPSTREAM_COMMIT. Every built
+bundle contains SOURCE.txt, LICENSE and this NOTICE.

@@ -1,0 +1,67 @@
+# Allowlist for scripts/verify-offline.sh.  Format (TAB-separated): host, file regex (relative to dist), reason.
+# A hit is allowed only if BOTH the host and the file match. Anything else fails the build (STRICT=1).
+# Static scan only: "dead default" and "blocked by CSP" claims are inferred from source and the generated
+# _headers, NOT verified in a browser. The generated CSP contains no external origin (check-dist.sh).
+#
+# --- Strings that can become requests (reviewed individually) ---
+cdn.jsdelivr.net	^assets/(wasm-provider|tesseract-runtime)-	Default CDN URL for PyMuPDF/GS/CPDF/Tesseract; overridden by VITE_WASM_*/VITE_TESSERACT_* same-origin URLs at build time (dead default)
+cdn.jsdelivr.net	^wasm/ocr/worker\.min\.js$	tesseract.js worker default corePath/langPath; overridden by VITE_TESSERACT_* (dead default)
+cdn.jsdelivr.net	^assets/worker-engine-	@embedpdf fonts default; overridden by VITE_EMBEDPDF_FONTS_URL for shipped packs; CJK packs are not shipped so that fallback would try the CDN (blocked by CSP)
+cdn.jsdelivr.net	^assets/embedpdf-	Library default for pdfium.wasm; Edit PDF passes its own vendored wasm, so expected unused (not browser-verified)
+cdn.jsdelivr.net	^wasm/pymupdf/assets/pyodide\.js$	pyodide setCdnUrl for package loading; PyMuPDF ships its packages locally (not browser-verified); blocked by CSP
+cdn.jsdelivr.net	^sw\.js$	service worker trustedCdnOrigins set (caching policy), not a request by itself; origin is blocked by CSP
+rawcdn.githack.com	^assets/font-loader-	Default Noto font URLs; overridden by VITE_OCR_FONT_BASE_URL (dead default)
+fonts.googleapis.com	^assets/embedpdf-	REAL request: @import of Google Fonts CSS in the Edit PDF viewer (leaks client IP). Blocked by CSP style-src in hosts that honour _headers; not verified in browser
+bentopdf-cors-proxy.bentopdf.workers.dev	^assets/digital-sign-pdf-	REAL request when signing: cors-proxy for remote certificate/OCSP/timestamp requests (leaks metadata). Blocked by CSP connect-src in hosts that honour _headers; not verified in browser
+freetsa.org	^assets/digital-sign-pdf-	Selectable RFC 3161 timestamp authority; contacted only if the user enables timestamping. Blocked by CSP connect-src in hosts that honour _headers; not verified in browser
+timestamp.digicert.com	^assets/digital-sign-pdf-	Selectable RFC 3161 timestamp authority; contacted only if the user enables timestamping. Blocked by CSP connect-src in hosts that honour _headers; not verified in browser
+timestamp.sectigo.com	^assets/digital-sign-pdf-	Selectable RFC 3161 timestamp authority; contacted only if the user enables timestamping. Blocked by CSP connect-src in hosts that honour _headers; not verified in browser
+timestamp.apple.com	^assets/digital-sign-pdf-	Selectable RFC 3161 timestamp authority; contacted only if the user enables timestamping. Blocked by CSP connect-src in hosts that honour _headers; not verified in browser
+timestamp.entrust.net	^assets/digital-sign-pdf-	Selectable RFC 3161 timestamp authority; contacted only if the user enables timestamping. Blocked by CSP connect-src in hosts that honour _headers; not verified in browser
+tsa.mesign.com	^assets/digital-sign-pdf-	Selectable RFC 3161 timestamp authority; contacted only if the user enables timestamping. Blocked by CSP connect-src in hosts that honour _headers; not verified in browser
+ts.ssl.com	^assets/digital-sign-pdf-	Selectable RFC 3161 timestamp authority; contacted only if the user enables timestamping. Blocked by CSP connect-src in hosts that honour _headers; not verified in browser
+#
+# --- Documentation links, XML namespaces and package metadata inside vendored code (not requested) ---
+github.com	^(assets/(architectureDiagram|chunk|diagram|digital-sign-pdf|email-to-pdf|es|fontkit\.es|index\.es|markdown-to-pdf|tesseract-runtime|tiff-to-pdf|wardleyDiagram)-|coherentpdf\.browser\.min\.js$|wasm/cpdf/coherentpdf\.browser(\.min)?\.js$|wasm/embedpdf-fonts/[^/]+/package\.json$)	Repository/doc links in vendored library comments, error strings and package.json metadata
+git.io	^wasm/cpdf/coherentpdf\.browser\.js$	Link in vendored library comment
+goo.gl	^wasm/cpdf/coherentpdf\.browser\.js$	Link in vendored library comment
+www.embedpdf.com	^wasm/embedpdf-fonts/[^/]+/package\.json$	package.json homepage metadata
+www.coherentpdf.com	^coherentpdf\.browser\.min\.js$	Link in vendored library header comment
+bitwiseshiftleft.github.io	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+en.wikipedia.org	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+feross.org	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+hyperelliptic.org	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+msdn.microsoft.com	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+narwhaljs.org	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+pajhome.org.uk	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+bugs.chromium.org	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+bugzilla.mozilla.org	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+code.google.com	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+developer.mozilla.org	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+stackoverflow.com	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+tools.ietf.org	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+wiki.commonjs.org	^wasm/cpdf/coherentpdf\.browser\.js$	Documentation link in comment of vendored coherentpdf build
+chevrotain.io	^assets/chunk-	Documentation link in vendored chevrotain code
+en.wikipedia.org	^assets/chunk-	Documentation link in vendored code
+langium.org	^assets/chunk-	Documentation link in vendored code
+schemas.microsoft.com	^assets/xlsx-	XML namespace string in vendored SheetJS
+sheetjs.com	^assets/xlsx-	Link in vendored SheetJS
+macVmlSchemaUri	^assets/xlsx-	Pseudo-host: identifier string inside vendored SheetJS, not a URL
+jspdf.default.namespaceuri	^assets/jspdf\.plugin\.autotable-	Pseudo-host: identifier string, not a URL
+cdnjs.cloudflare.com	^assets/jspdf\.plugin\.autotable-	Library comment/dead code mentioning a pdfobject URL
+www.i18next.com	^assets/main-	Link in vendored i18next console message
+locize.com	^assets/main-	Link in vendored i18next console message
+foo.bar	^assets/main-	Dummy base for new URL() parsing; no request
+$	^assets/(main|markdown-it|pdf\.worker)-	Pseudo-host: template literal prefix "http://${...}" in vendored code; host chosen at runtime by caller, not a fixed URL
+opencollective.com	^assets/tesseract-runtime-	Funding link in vendored package metadata
+stuk.github.io	^assets/jszip\.min-	Link in vendored JSZip license header
+rolldown.rs	^assets/lucide-	Link in vendored comment
+tailwindcss.com	^assets/(embedpdf-|lucide-)	Tailwind license/comment header
+phosphoricons.com	^assets/Phosphor-	Link in vendored icon SVG metadata
+raw.githubusercontent.com	^assets/Phosphor-	Link in vendored icon SVG metadata
+mozilla.org	^assets/form-creator-.*\.css$	Link in vendored CSS comment
+fengyuanchen.github.io	^assets/crop-pdf-.*\.css$	Link in vendored Cropper.js CSS comment
+www.color.org	^assets/ghostscript-loader-	ICC profile reference string
+www.idpf.org	^assets/pdf-to-cbz-	EPUB/OPF XML namespace string
+www.langedge.jp	^assets/digital-sign-pdf-	Link in vendored library comment
+bentopdf.com	^assets/markdown-to-pdf-	Upstream marketing URL string inside generated content template (not fetched by code path reviewed)

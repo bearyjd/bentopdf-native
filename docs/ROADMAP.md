@@ -24,9 +24,22 @@ operates on the document in the active tab. Fully offline.
 ## Constraints and risks
 
 - AGPL-3.0 throughout; NOTICE credits upstream and libraries. No release ships
-  while any NOTICE line is UNVERIFIED.
-- `hyper-compress-wasm` is imported by default (`src/js/utils/compress.ts`) and
-  is separately licensed: exclude via patch/`DISABLE_TOOLS`. Same for Kura.
+  while any NOTICE line is marked NEEDS REVIEW. Every bundle carries
+  SOURCE.txt, LICENSE and NOTICE.
+- Supply chain: upstream pinned by tag and commit (`UPSTREAM_COMMIT`), npm
+  install scripts disabled, all downloads checksum-pinned
+  (`scripts/checksums.sha256`). The build executes upstream code, so it is not
+  run in PR CI.
+- Runtime network: the generated CSP has no external origin; two upstream
+  third-party calls (digital-sign cors proxy/timestamp servers, Google Fonts
+  `@import`) remain in the code and are only CSP-blocked, not browser-verified.
+  M2 must enforce an equivalent policy in Electron and run a network-blocked
+  headless check (deferred from M1), plus COOP/COEP and custom-scheme `BASE_URL`.
+- `hyper-compress-wasm` and Kura are separately licensed and must not ship.
+  Checked at v2.8.10: nothing imports them (no patch needed); only their
+  marketing pages exist, which the local-bundle build removes (and
+  `scripts/check-dist.sh` fails the build if they reappear). Navbar/legal-page
+  links to them remain as dead links. Re-check on every `UPSTREAM_VERSION` bump.
 - Upstream CLA means nothing here can be merged upstream without the owner
   signing the ICLA; this repo stays AGPL-only.
 - Overlap: upstream issue #219 reply says a reader-style UX "will be a part of
