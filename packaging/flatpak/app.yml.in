@@ -49,5 +49,5 @@ modules:
       - type: file
         path: @APP_ID@.metainfo.xml
       - type: file
-        path: ../../../icons/512x512.png
+        path: icon-512.png
         dest-filename: icon-512.png

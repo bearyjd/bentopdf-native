@@ -189,7 +189,7 @@ while IFS= read -r d; do
   grep -q '^MimeType=.*application/pdf' "$d" || fail "${d#"$OUT"/}: no MimeType=application/pdf"
   grep -Eq '^Exec=.* %f$' "$d" || fail "${d#"$OUT"/}: Exec does not end in %f"
   grep -q '^Categories=Office;Utility;' "$d" || fail "${d#"$OUT"/}: Categories is not Office;Utility;"
-  grep -q '^StartupWMClass=' "$d" || fail "${d#"$OUT"/}: no StartupWMClass"
+  grep -qx "StartupWMClass=$APP_ID" "$d" || fail "${d#"$OUT"/}: StartupWMClass is not $APP_ID"
   if [ "$KIND" = appimage ]; then LAUNCH="AppRun"; else LAUNCH="$EXE_NAME"; fi
   grep -q "^Exec=.*$LAUNCH" "$d" || fail "${d#"$OUT"/}: Exec does not start $LAUNCH"
   if grep -Eq -- '--no-sandbox|--disable-setuid-sandbox' "$d"; then fail "${d#"$OUT"/}: sandbox-off flag in Exec"; fi
@@ -247,6 +247,8 @@ pass "modes: 0 group/world-writable, 0 setuid/setgid; chrome-sandbox $([ "$KIND"
 if [ -z "$TREE" ] && { [ "$KIND" = deb ] || [ "$KIND" = rpm ]; }; then
   if [ "$KIND" = deb ]; then dpkg-deb -c "$ART" > "$WORK/listing.txt"; else rpm -qp --queryformat '[%{FILEMODES:perms} %{FILENAMES}\n]' "$ART" > "$WORK/listing.txt"; fi
   [ -s "$WORK/listing.txt" ] || fail "empty package file listing"
+  if [ "$KIND" = deb ]; then PKG="$(dpkg-deb -f "$ART" Package)"; else PKG="$(rpm -qp --qf '%{NAME}' "$ART")"; fi
+  [ "$PKG" = "$EXE_NAME" ] || fail "package name is '$PKG', want $EXE_NAME (brand.json)"
   BAD="$(awk '$1 !~ /^l/ && (substr($1,6,1)=="w" || substr($1,9,1)=="w" || substr($1,4,1) ~ /[sS]/ || substr($1,7,1) ~ /[sS]/) {n++} END {print n+0}' "$WORK/listing.txt")"
   [ "$BAD" = 0 ] || fail "package listing has $BAD group/world-writable or setuid/setgid entr(ies)"
   pass "package listing ($(wc -l < "$WORK/listing.txt") entries): no group/world-writable, setuid or setgid modes"

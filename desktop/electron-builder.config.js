@@ -37,7 +37,7 @@ module.exports = {
     ],
     executableName: brand.executableName,
     category: 'Office;Utility',
-    icon: '../packaging/icons/512x512.png',
+    icon: brand.iconPng,
     syncDesktopName: true,
     // No --no-sandbox, ever. Exec field codes are set per target below.
     mimeTypes: ['application/pdf'],
@@ -56,12 +56,14 @@ module.exports = {
     executableArgs: ['--ozone-platform-hint=auto'],
   },
   deb: {
+    packageName: brand.executableName,
     executableArgs: ['--ozone-platform-hint=auto', '%f'],
     depends: ['libgtk-3-0', 'libnotify4', 'libnss3', 'libxss1', 'libxtst6', 'xdg-utils', 'libatspi2.0-0', 'libuuid1', 'libsecret-1-0'],
     // Picks the sandbox mode at install time; the payload's chrome-sandbox is NOT setuid.
     afterInstall: '../packaging/linux/after-install.sh',
   },
   rpm: {
+    packageName: brand.executableName,
     afterInstall: '../packaging/linux/after-install.sh',
     executableArgs: ['--ozone-platform-hint=auto', '%f'],
     // Fedora/RHEL package names (electron-builder's defaults are SUSE/Debian-ish).

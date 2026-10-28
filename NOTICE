@@ -44,8 +44,9 @@ installed package at the versions the build uses). They are NOT a legal review.
                                               LGPL component (FFmpeg): libffmpeg.so inside the package is a separate
                                               shared library, FFmpeg git-2026-08-25-e5441fe421, which reports "libavformat,
                                               libavutil, libavcodec license: LGPL version 2.1 or later" (read from the
-                                              binary with `strings`, Electron 45.1.0 download). It is dynamically loaded
-                                              and can be replaced by a rebuilt libffmpeg.so placed in the same directory.
+                                              binary with `strings`, Electron 45.1.0 download). It is a dynamic
+                                              dependency of the executable (DT_NEEDED, `readelf -d`), so a rebuilt libffmpeg.so
+                                              placed in the same directory replaces it.
                                               Corresponding source: Electron v45.1.0 (github.com/electron/electron, tag
                                               v45.1.0) pins Chromium and its third_party/ffmpeg revision in its DEPS file;
                                               the licence text is in LICENSES.chromium.html. SOURCE.txt records the

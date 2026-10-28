@@ -22,7 +22,6 @@
     "eslint": "10.1.0",
     "globals": "17.4.0"
   },
-  "desktopName": "io.github.bearyjd.BentoPDFNative.desktop",
   "homepage": "https://github.com/bearyjd/bentopdf-native",
   "author": {
     "name": "bearyjd",

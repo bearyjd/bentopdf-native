@@ -29,6 +29,7 @@ render app.desktop.in "$R/$ID.desktop"
 render app.metainfo.xml.in "$R/$ID.metainfo.xml"
 render app.yml.in "$R/$ID.yml"
 render launcher.sh.in "$R/$EXE.sh" 755
+cp "$DESKTOP/$(node -p "require('$DESKTOP/brand.json').iconPng")" "$R/icon-512.png"
 if [ "${FLATPAK_USE_BUILDER:-0}" = 1 ]; then
   flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=.build/repo --state-dir=.build/state .build/app "$R/$ID.yml"
 else
@@ -43,7 +44,7 @@ else
   install -m755 "$R/$EXE.sh" "$APP/bin/$EXE"
   install -m644 "$R/$ID.desktop" "$APP/share/applications/$ID.desktop"
   install -m644 "$R/$ID.metainfo.xml" "$APP/share/metainfo/$ID.metainfo.xml"
-  install -m644 ../icons/512x512.png "$APP/share/icons/hicolor/512x512/apps/$ID.png"
+  install -m644 "$R/icon-512.png" "$APP/share/icons/hicolor/512x512/apps/$ID.png"
   # Keep in sync with finish-args in the manifest. No network, no filesystem access.
   # build-finish adds a plain x11 socket for fallback-x11 on its own. --nosocket=x11 removes it, but ONLY
   # when it comes after --socket=fallback-x11 (given before, fallback-x11 re-adds x11). Keep it last.

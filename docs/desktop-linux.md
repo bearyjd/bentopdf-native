@@ -334,14 +334,15 @@ source URL is derived from **one file: `desktop/brand.json`** (`productName`, `a
 `executableName`, `summary`, `sourceUrl`, `upstreamUrl`). To rename:
 
 1. Edit `desktop/brand.json`.
-2. Set `"desktopName": "<appId>.desktop"` in `desktop/package.json` (the dev-mode default; a unit
-   test, `test/brand.test.js`, fails if it disagrees; packaged builds override it from brand.json).
-3. Rebuild (`scripts/package-linux.sh`, `packaging/flatpak/build-flatpak.sh`).
+2. Rebuild (`scripts/package-linux.sh`, `packaging/flatpak/build-flatpak.sh`).
+
+`desktop/electron-builder.config.js` feeds `desktopName` into the packaged `package.json` (the window
+class / Wayland `app_id`), and `test/brand.test.js` fails if `package.json` grows its own `desktopName`.
 
 That covers `productName`, `appId`, the `.desktop` name and `Name=`, the WM class / Wayland
 `app_id` (`StartupWMClass`), the metainfo `<id>`, the Flatpak id and its files, the executable
-(and `AppRun`, launcher, deb/rpm names), the About text and the source link. Not derived: the
-icon (replace `packaging/icons/icon.svg`, run `render-icons.sh`), the prose in `NOTICE`/docs, and
+(and `AppRun`, launcher, the deb/rpm package name), the About text and the source link. The icon file path is in brand.json too (`iconPng`); to change the artwork replace
+`packaging/icons/icon.svg` and run `render-icons.sh`. Not derived: the prose in `NOTICE`/docs, and
 the `bearyjd` developer name in the metainfo.
 
 ## What the build tooling touched on the builder host
