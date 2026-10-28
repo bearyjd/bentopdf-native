@@ -55,9 +55,18 @@ transports. The Tesseract worker already receives absolute URLs.
 The bundle's `Permissions-Policy` already blocks geolocation/camera/mic before
 the main process is asked, so geolocation proves nothing about the shell's
 handler (an earlier version of this test accepted "position unavailable" as
-denied). The test now probes `notifications` and `clipboard-read`, asserts the
-page-visible answers, and asserts the main-process handler was invoked for both
-and returned false every time.
+denied). The `denied` scenario asserts the page-visible answers
+(`permissions.query` and `Notification.requestPermission()` say `denied`),
+records every request/check the main-process handlers see, requires that
+`Notification.requestPermission()` reached the request handler, and requires
+that every observed decision was `false`. `clipboard-read` is recorded but NOT
+required to reach the handler: `navigator.clipboard.readText()` only asks the
+main process when the document is focused, and an independent verifier's
+headless run never got there (the original assertion failed on an unmutated
+baseline; it passed 5/5 on each transport here, so the focus dependence is the
+likely, not proven, cause). Proof the scenario can fail: with `decidePermission`
+mutated to `() => true` (on a copy under `$TMPDIR`) it fails on both transports.
+`security.test.js` stays the unit-level guard for the decision function.
 
 ### Service worker on the scheme
 
@@ -73,7 +82,7 @@ test registers `/sw.js` manually.
 ## What passed (both transports unless noted)
 
 - Isolation with the shell's exact header values; workers; traversal; hidden
-  files; 404/405; permission denial with the handler asserted; `window.open`
+  files; 404/405; permission denial (notifications reach the handler; all decisions false); `window.open`
   denied; navigation to an external URL blocked; external `fetch` fails;
   `readFile` with an unissued token or forged UUID rejected; no Node globals.
 - Merge PDF: zero requests outside the app origin, no unexpected console,
@@ -96,9 +105,9 @@ Run with the shell stripping each source in turn (scheme transport):
 | Change | Result |
 |---|---|
 | remove `'unsafe-eval'` (keep `'wasm-unsafe-eval'`) | Merge handoff (pdf.js), OCR, Ghostscript, PyMuPDF (PDF to Markdown), Linearize, workers, Page Dimensions on 105 MiB: all pass. **Word to PDF (LibreOffice) fails**: console `EvalError: Evaluating a string as JavaScript violates ... 'unsafe-eval' is not an allowed source`, then `ConversionError: WASM initialization timeout` after 300 s. |
-| remove `blob:` from `script-src` (keep `unsafe-eval`; `worker-src` keeps `blob:`) | everything above passes, including LibreOffice. |
+| remove `blob:` from `script-src` (keep `unsafe-eval`; `worker-src` keeps `blob:`) | the tools above pass, **but this was wrong as a general claim**: `ghostscript-loader` does `import(URL.createObjectURL(new Blob([gs.js])))`, a blob: module script, which the CSP then blocks (`Loading the script 'blob:...' violates ... script-src`, import fails). Compress PDF went through `ghostscript-dynamic-loader`, which does not use a blob, so the first experiment missed it. Found by the `ghostscript` probe of `npm run test:csp-smoke`. |
 
-Result: the shell now serves `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`.
+Result: the shell serves the bundle's own `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob:`.
 - `'unsafe-eval'`: kept, solely for LibreOffice WASM (evidence above). It is
   allowlisted with that reason in `desktop/src/headers.js`; any other
   `unsafe-eval`/`unsafe-inline` in `script-src` makes the shell refuse to serve.
@@ -106,12 +115,52 @@ Result: the shell now serves `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'
 - `'wasm-unsafe-eval'`: redundant while `'unsafe-eval'` is present (which also
   allows WebAssembly compilation); kept so dropping `unsafe-eval` later is a
   one-line change. Its removal was not tested alone.
-- `blob:` in `script-src`: removed by the shell. Only the tools listed above
-  were exercised; untested tools (about 120 pages) might need it back, and the
-  fix is to re-add it with a failing test as evidence.
+- `blob:` in `script-src`: kept, allowlisted with a reason in `headers.js`.
+  Needed by Ghostscript tools that use `ghostscript-loader` (PDF/A, Font to
+  Outline, workflow). CSP cannot scope it to one tool, so every page can run
+  blob: scripts; a per-page CSP (or an upstream change to load gs.js by URL)
+  would confine it. `script-src-elem`/`-attr` and `worker-src` allow no more
+  than `'self'`, `'wasm-unsafe-eval'` (and `blob:` for workers, which tools
+  spawn from blob URLs).
+- Fail-closed validation is a token allowlist (`script-src`, `script-src-elem`,
+  `script-src-attr`, `worker-src`, `default-src` when `script-src` is absent):
+  `'self'`, `'wasm-unsafe-eval'`, `'none'` plus the reasoned exceptions. Hashes,
+  nonces, `unsafe-inline`, `unsafe-hashes`, `strict-dynamic`, `*`, `data:`,
+  `filesystem:` and any scheme/host source are refused (one unit test each).
 - `style-src 'unsafe-inline'`: left as shipped by the bundle; removal NOT tested.
 - `/docs` has its own CSP in `_headers`; the shell applies only the `/*` block and
   refuses to start if `dist/docs` exists (it does not in this bundle).
+
+## Static trace of script URLs built from blob: URLs
+
+Greps over `dist` for `importScripts`, `new Worker`, `createElement('script')`,
+`import(`+`createObjectURL`:
+
+- **Needs blob: in script-src**: `ghostscript-loader` (`import(blobUrl)`); proven
+  by the smoke probe. Not needing it: `ghostscript-dynamic-loader` (script tag
+  with a path), `cpdf` workers (`importScripts(getUrl('cpdf') + ...)`, a path),
+  `libreoffice-wasm/browser.worker.global.js` (`importScripts(sofficeJs)`, a
+  path; its `<script>` fallback also a path), `soffice.js`/`soffice.worker.js`
+  (`importScripts(Blob URL)` only when `mainScriptUrlOrBlob` is a Blob, which
+  the loader never sets), `pyodide.asm.js`/`pyodide.js` (`importScripts(url)`
+  with the indexURL path), pdf.js workers (module URL), tesseract
+  (`new Worker(blob)` whose body `importScripts`'s an absolute http path; worker-src).
+- Blob workers (heic2any, embedpdf, tesseract) are governed by `worker-src`.
+- The static trace cannot prove paths computed at runtime (wasm-settings
+  custom base URLs); by default they are same-origin paths.
+
+## Test-backed vs only manually observed
+
+Test-backed (`npm test`): the 137 top-level pages of the bundle each load on the
+scheme transport with zero CSP violations (`test/csp-smoke`, allowlist file
+`test/csp-smoke/allowlist.json` is empty); Ghostscript's blob import works; the
+header allowlist (unit tests, mutation-sensitive); e2e scenarios listed under
+"What passed".
+Only manually observed: the CSP-experiment rows for PyMuPDF, Linearize and the
+other tools (no committed test); pages' behaviour AFTER user action. The smoke
+test only loads pages; worker/script paths reached by uploading files (vips,
+heic2any, embedpdf, pyodide, cpdf workers) are covered by the static trace and,
+for cpdf/pyodide/vips, not at all dynamically.
 
 ## Memory (peak RSS / PSS of the Electron process tree, MiB)
 
