@@ -1,6 +1,6 @@
 #!/bin/sh
 # AppRun for the BentoPDF Native AppImage. Replaces electron-builder's, which
-# silently appends --no-sandbox when user namespaces are unavailable. Here the
+# silently turns the Chromium sandbox off when user namespaces are unavailable. Here the
 # app either runs with Chromium's sandbox or does not run, and says why.
 set -eu
 
