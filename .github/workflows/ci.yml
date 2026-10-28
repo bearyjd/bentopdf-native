@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    name: Repo hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No signing material or env files tracked
+        run: |
+          bad=$(git ls-files | grep -E '\.(jks|keystore|p12|pfx|pem|p8|mobileprovision|cer)$|(^|/)keystore\.properties$|(^|/)\.env($|\.)' | grep -v '\.env\.example$' || true)
+          if [ -n "$bad" ]; then echo "Forbidden files tracked:"; echo "$bad"; exit 1; fi
+      - name: No obvious secrets in tracked files
+        run: |
+          if git grep -nE '(-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16})' -- . ':!.github/workflows/ci.yml'; then
+            echo "Possible secret committed"; exit 1; fi
+      - name: AGPL license present
+        run: grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE
+
+  shellcheck:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          files=$(git ls-files '*.sh')
+          if [ -z "$files" ]; then echo "no shell scripts"; exit 0; fi
+          shellcheck -S warning $files
