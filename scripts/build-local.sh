@@ -71,7 +71,9 @@ fi
 # --- 5. download WASM packages into the cache (skipped when cached) ----------
 mkdir -p "$CACHE_DIR/ocr-langdata" "$CACHE_DIR/ocr-fonts"
 pack() { # name@version -> tgz in cache
-  local spec="$1" f="$CACHE_DIR/$(echo "$1" | sed 's#^@##; s#/#-#; s#@#-#').tgz"
+  local spec="$1" name f
+  name=$(echo "$1" | sed 's#^@##; s#/#-#; s#@#-#')
+  f="$CACHE_DIR/$name.tgz"
   if [ ! -f "$f" ]; then
     info "downloading $spec"
     local t; t=$(mktemp -d)
