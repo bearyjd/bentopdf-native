@@ -6,6 +6,14 @@ const fixtures = require('../fixtures');
 const { startSampler } = require('../rss');
 
 const selfPid = process.pid;
+// Peak RSS of the whole Electron process tree is REPORTED, not benchmarked. The
+// ceiling only catches runaway growth; it is deliberately generous. Each scenario
+// runs in its own fresh Electron process, so numbers are per scenario.
+const RSS_CEILING_MIB = 4096;
+
+function assertMemory(memory) {
+  if (memory.peakRssMiB > RSS_CEILING_MIB) throw new Error(`peak RSS ${memory.peakRssMiB} MiB exceeds ${RSS_CEILING_MIB} MiB`);
+}
 
 async function libreoffice(ctx) {
   const docx = path.join(ctx.workDir, 'sample.docx');
@@ -24,9 +32,13 @@ async function libreoffice(ctx) {
   } finally {
     var memory = stop();
   }
+  if (download.state !== 'completed') throw new Error(`download state ${download.state}`);
   const bytes = ctx.read(download.target);
   if (bytes.subarray(0, 5).toString('latin1') !== '%PDF-') throw new Error('output is not a PDF');
-  return { seconds: Math.round((Date.now() - started) / 1000), pdfBytes: bytes.length, ...memory };
+  const text = await fixtures.extractPdfText(download.target);
+  if (!text.includes(fixtures.DOCX_TEXT)) throw new Error(`PDF text does not contain the fixture string: ${JSON.stringify(text.slice(0, 200))}`);
+  assertMemory(memory);
+  return { seconds: Math.round((Date.now() - started) / 1000), pdfBytes: bytes.length, text: text.trim(), ...memory };
 }
 
 async function drawTextPng(ctx) {
@@ -61,13 +73,16 @@ async function ocr(ctx) {
   }
   const norm = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!norm.includes('BENTO') || !norm.includes('2024')) throw new Error(`OCR text not recovered: ${JSON.stringify(text)}`);
+  assertMemory(memory);
   return { recovered: text.trim(), seconds: Math.round((Date.now() - started) / 1000), ...memory };
 }
 
 async function bigPdf(ctx) {
   const big = path.join(ctx.workDir, 'big.pdf');
-  await fixtures.writeBigPdf(big, { megabytes: 105, pages: 300 });
-  const sizeMiB = Math.round(fs.statSync(big).size / 1048576);
+  const TARGET_MIB = 105;
+  await fixtures.writeBigPdf(big, { megabytes: TARGET_MIB, pages: 300 });
+  const sizeMiB = fs.statSync(big).size / 1048576;
+  if (sizeMiB < TARGET_MIB || sizeMiB > TARGET_MIB + 1) throw new Error(`fixture is ${sizeMiB.toFixed(2)} MiB, expected ${TARGET_MIB}`);
   await ctx.load('/page-dimensions.html');
   await ctx.waitFor(`!!document.querySelector('#file-input')`, 30000);
   await ctx.sleep(1500);
@@ -85,8 +100,9 @@ async function bigPdf(ctx) {
     var memory = stop();
   }
   const rows = await ctx.js(`document.querySelectorAll('#dimensions-table-body tr').length`);
-  if (!/300/.test(summary) && rows < 300) throw new Error(`page count not 300: summary=${summary} rows=${rows}`);
-  return { pdfMiB: sizeMiB, seconds: Math.round((Date.now() - started) / 1000), summary: summary.slice(0, 120), rows, ...memory };
+  if (!/\b300\b/.test(summary) || rows !== 300) throw new Error(`page count not 300: summary=${summary} rows=${rows}`);
+  assertMemory(memory);
+  return { pdfMiB: Math.round(sizeMiB * 10) / 10, seconds: Math.round((Date.now() - started) / 1000), summary: summary.slice(0, 120), rows, ...memory };
 }
 
 module.exports = { libreoffice, ocr, bigPdf };

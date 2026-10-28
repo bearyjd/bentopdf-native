@@ -7,7 +7,7 @@ const { session } = require('electron');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Helpers shared by scenarios. `app` is the object returned by startApp. */
-function createContext({ app, workDir, dialogState }) {
+function createContext({ app, workDir, dialogState, transport }) {
   const { window: win } = app;
   const events = { consoleErrors: [], httpErrors: [], netErrors: [], downloads: [] };
 
@@ -68,7 +68,7 @@ function createContext({ app, workDir, dialogState }) {
   }
 
   const read = (file) => fs.readFileSync(file);
-  return { app, win, origin: app.origin, events, js, waitFor, waitForDownload, load, handoff, pickFiles, read, workDir, sleep };
+  return { app, transport, win, origin: app.origin, events, js, waitFor, waitForDownload, load, handoff, pickFiles, read, workDir, sleep };
 }
 
 module.exports = { createContext, sleep };

@@ -35,16 +35,35 @@ async function writePngPdf(file, png, width, height) {
   fs.writeFileSync(file, await doc.save());
 }
 
-/** 100+ MB PDF: many pages plus incompressible orphan streams. */
+/**
+ * PDF of `pages` blank pages plus incompressible orphan streams totalling
+ * exactly `megabytes` MiB of payload (the file is that plus a small structural
+ * overhead; callers assert the real size).
+ */
 async function writeBigPdf(file, { megabytes = 105, pages = 300 } = {}) {
   const { PDFDocument } = upstreamRequire('pdf-lib');
   const doc = await PDFDocument.create();
   for (let i = 0; i < pages; i += 1) doc.addPage([612, 792]);
   const chunk = 8 * 1024 * 1024;
-  for (let written = 0; written < megabytes * 1024 * 1024; written += chunk) {
-    doc.context.register(doc.context.stream(crypto.randomBytes(chunk)));
+  for (let left = megabytes * 1024 * 1024; left > 0; left -= chunk) {
+    doc.context.register(doc.context.stream(crypto.randomBytes(Math.min(chunk, left))));
   }
   fs.writeFileSync(file, await doc.save({ useObjectStreams: false }));
+}
+
+/** Text of every page of a PDF, via the pdf.js that BentoPDF itself ships (node side). */
+async function extractPdfText(file) {
+  const pdfjsPath = require.resolve('pdfjs-dist/legacy/build/pdf.mjs', { paths: [UPSTREAM_MODULES] });
+  const pdfjs = await import(require('node:url').pathToFileURL(pdfjsPath).href);
+  const data = new Uint8Array(fs.readFileSync(file));
+  const doc = await pdfjs.getDocument({ data, useSystemFonts: true, isEvalSupported: false }).promise;
+  const pages = [];
+  for (let n = 1; n <= doc.numPages; n += 1) {
+    const content = await (await doc.getPage(n)).getTextContent();
+    pages.push(content.items.map((item) => item.str).join(' '));
+  }
+  await doc.destroy();
+  return pages.join('\n');
 }
 
 async function writeDocx(file) {
@@ -65,9 +84,11 @@ async function writeDocx(file) {
   zip.file(
     'word/document.xml',
     '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
-      '<w:p><w:r><w:t>BentoPDF desktop LibreOffice fixture</w:t></w:r></w:p></w:body></w:document>'
+      '<w:p><w:r><w:t>' + DOCX_TEXT + '</w:t></w:r></w:p></w:body></w:document>'
   );
   fs.writeFileSync(file, await zip.generateAsync({ type: 'nodebuffer' }));
 }
 
-module.exports = { writeSmallPdf, writePngPdf, writeBigPdf, writeDocx };
+const DOCX_TEXT = 'BentoPDF desktop LibreOffice fixture';
+
+module.exports = { writeSmallPdf, writePngPdf, writeBigPdf, writeDocx, extractPdfText, DOCX_TEXT };

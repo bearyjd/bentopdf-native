@@ -16,8 +16,9 @@ const { prepare, startApp } = require('../../src/app');
 const { createContext } = require('./context');
 const core = require('./scenarios-core');
 const heavy = require('./scenarios-heavy');
+const page = require('./scenarios-page');
 
-const ALL = { ...core, ...heavy };
+const ALL = { ...core, ...page, ...heavy };
 const transport = process.env.BENTO_TEST_TRANSPORT || 'scheme';
 const outFile = process.env.BENTO_TEST_OUT;
 const names = (process.env.BENTO_TEST_SCENARIOS || Object.keys(ALL).join(',')).split(',');
@@ -40,7 +41,7 @@ async function runAll() {
     dialogs,
     url: '/index.html',
   });
-  const ctx = createContext({ app: appHandle, workDir, dialogState });
+  const ctx = createContext({ app: appHandle, workDir, dialogState, transport });
   for (const name of names) {
     const started = Date.now();
     try {
