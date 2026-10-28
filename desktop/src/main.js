@@ -4,6 +4,7 @@ const path = require('node:path');
 const { app, dialog, Menu, shell } = require('electron');
 const { prepare, startApp, TRANSPORTS, log } = require('./app');
 const { aboutDetail, buildMenuTemplate, SOURCE_URL } = require('./menu');
+const { unsafeSwitches } = require('./argv-policy');
 const { pdfPathsFromArgv } = require('./open-file');
 
 // Decided by experiment, see docs/m2-findings.md.
@@ -39,7 +40,11 @@ function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ showAbout, openSource, devtools: !app.isPackaged })));
 }
 
-if (!TRANSPORTS.includes(transport)) {
+const refused = unsafeSwitches(process.argv);
+if (refused.length > 0) {
+  process.stderr.write(`[bento] refusing to start with unsafe switch(es): ${refused.join(' ')}\n`);
+  app.exit(2);
+} else if (!TRANSPORTS.includes(transport)) {
   process.stderr.write(`BENTO_TRANSPORT must be one of ${TRANSPORTS.join(', ')}\n`);
   app.exit(2);
 } else if (!app.requestSingleInstanceLock()) {
@@ -61,6 +66,11 @@ if (!TRANSPORTS.includes(transport)) {
   };
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
+    const unsafe = unsafeSwitches(argv);
+    if (unsafe.length > 0) {
+      log(`ignored a second launch with unsafe switch(es): ${unsafe.join(' ')}`);
+      return;
+    }
     const win = handle && handle.window;
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();

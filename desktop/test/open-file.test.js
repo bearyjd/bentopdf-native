@@ -38,7 +38,7 @@ test('pdfPathsFromArgv: unpackaged argv also skips the app path; non-arrays and 
 test('validateOpenPath: accepts a small pdf; rejects wrong extension, directory, oversize, FIFO, missing', async () => {
   const ok = path.join(tmp, 'ok.pdf');
   fs.writeFileSync(ok, '%PDF-1.4');
-  assert.deepEqual(await validateOpenPath(ok, 100), { size: 8 });
+  assert.deepEqual(await validateOpenPath(ok, 100), { size: 8, filePath: fs.realpathSync(ok) });
   await assert.rejects(validateOpenPath(ok, 4), /too large/);
   const txt = path.join(tmp, 'a.txt');
   fs.writeFileSync(txt, 'x');
@@ -50,6 +50,25 @@ test('validateOpenPath: accepts a small pdf; rejects wrong extension, directory,
   execFileSync('mkfifo', [fifo]);
   await assert.rejects(validateOpenPath(fifo, 100), /not a regular file/);
   await assert.rejects(validateOpenPath(path.join(tmp, 'missing.pdf'), 100), /ENOENT/);
+});
+
+test('validateOpenPath: requires the %PDF- header and resolves symlinks (a link to a secret is refused)', async () => {
+  const secret = path.join(tmp, 'secret.txt');
+  fs.writeFileSync(secret, 'root:x:0:0');
+  const link = path.join(tmp, 'link.pdf');
+  fs.symlinkSync(secret, link);
+  await assert.rejects(validateOpenPath(link, 1000), /missing %PDF- header/);
+  const fake = path.join(tmp, 'fake.pdf');
+  fs.writeFileSync(fake, 'GIF89a');
+  await assert.rejects(validateOpenPath(fake, 1000), /missing %PDF- header/);
+  const short = path.join(tmp, 'short.pdf');
+  fs.writeFileSync(short, '%PD');
+  await assert.rejects(validateOpenPath(short, 1000), /missing %PDF- header/);
+  const real = path.join(tmp, 'real.pdf');
+  fs.writeFileSync(real, '%PDF-1.7 x');
+  const okLink = path.join(tmp, 'oklink.pdf');
+  fs.symlinkSync(real, okLink);
+  assert.equal((await validateOpenPath(okLink, 1000)).filePath, fs.realpathSync(real));
 });
 
 function harness() {
@@ -81,7 +100,7 @@ test('openPath: queued until the page listens, then pushed; token is readable by
 test('openPath: a main-frame navigation makes the page re-subscribe; same-document navigation does not', async () => {
   const h = harness();
   const p = path.join(tmp, 'nav.pdf');
-  fs.writeFileSync(p, '%PDF');
+  fs.writeFileSync(p, '%PDF-');
   await h.dispose.openPath(h.sender, p);
   await h.take();
   h.sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true });

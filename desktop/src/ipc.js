@@ -175,8 +175,8 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
    * the renderer. Same checks as the dialog path (.pdf, regular file, size cap).
    */
   const openPath = async (webContents, filePath) => {
-    const { size } = await validateOpenPath(filePath, MAX_BYTES);
-    const entry = issue(tableFor(webContents), filePath, size);
+    const { size, filePath: resolved } = await validateOpenPath(filePath, MAX_BYTES);
+    const entry = issue(tableFor(webContents), resolved, size);
     const state = openedFor(webContents);
     if (state.listening) webContents.send(CHANNELS.fileOpened, entry);
     else state.queue.push(entry);

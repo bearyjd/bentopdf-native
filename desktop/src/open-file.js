@@ -36,19 +36,28 @@ function pdfPathsFromArgv(argv, { cwd = process.cwd(), defaultApp = false } = {}
   return found;
 }
 
+const PDF_MAGIC = Buffer.from('%PDF-');
+
 /**
- * The file must be a `.pdf` regular file within `maxBytes`. Checked on an open
+ * The file must be a `.pdf` name that resolves (symlinks followed) to a regular
+ * file within `maxBytes` whose first bytes are `%PDF-`. Checked on an open
  * handle so a swap after the check cannot change what was measured; readFile
- * checks again when the content is actually read.
+ * checks again when the content is actually read. The returned `filePath` is
+ * the resolved path: a symlink named x.pdf that points at a secret is refused
+ * by the magic-byte check, and the grant never names the link.
  */
 async function validateOpenPath(filePath, maxBytes) {
   if (path.extname(filePath).toLowerCase() !== '.pdf') throw new Error('not a .pdf file');
-  const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  const resolved = await fs.promises.realpath(filePath);
+  const handle = await fs.promises.open(resolved, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error('not a regular file');
     if (stat.size > maxBytes) throw new Error('file too large');
-    return { size: stat.size };
+    const head = Buffer.alloc(PDF_MAGIC.length);
+    const { bytesRead } = await handle.read(head, 0, head.length, 0);
+    if (bytesRead < head.length || !head.equals(PDF_MAGIC)) throw new Error('not a PDF (missing %PDF- header)');
+    return { size: stat.size, filePath: resolved };
   } finally {
     await handle.close();
   }
