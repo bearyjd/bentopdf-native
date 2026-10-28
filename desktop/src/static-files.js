@@ -68,6 +68,9 @@ async function resolveFile(rootReal, urlPath) {
   const decoded = decodePath(urlPath);
   if (decoded === null) return null;
   const rel = decoded.replace(/^\/+/, '');
+  // The URL-level hidden check, the realpath-level hidden check and isInside below
+  // overlap on purpose: each guards a different stage (request path, symlink target,
+  // root escape). Do not delete one because another "already covers" it.
   if (rel.split('/').some(isHiddenSegment)) return null;
   const candidates = decoded.endsWith('/')
     ? [path.join(rel, 'index.html')]

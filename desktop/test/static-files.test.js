@@ -91,6 +91,8 @@ test('range requests: syntactically invalid or unsupported ranges are ignored (R
   }
 });
 
+// The URL-level and the post-realpath hidden checks (and isInside) are intentionally redundant:
+// '/.env' hits the first, '/innocent.txt' (symlink to .env) only the second.
 test('dotfiles, _headers and _redirects are never served', async () => {
   fs.writeFileSync(path.join(root, '.env'), 'SECRET=1');
   fs.writeFileSync(path.join(root, '_headers'), '/*\n  A: 1');
