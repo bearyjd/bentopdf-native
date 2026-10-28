@@ -36,21 +36,38 @@ installed package at the versions the build uses). They are NOT a legal review.
   - Electron 45.1.0 (desktop/ shell) ........ MIT             [LICENSE of the electron-v45.1.0-linux-x64 download ("Copyright (c) Electron contributors ...
                                                               Permission is hereby granted, free of charge ..." = MIT text), shipped as
                                                               LICENSE.electron.txt inside every Linux artifact]
-  - Chromium and its bundled third-party components (inside every packaged Electron build) ... a mix of licences,
-                                              including LGPL parts. Their notices ship as LICENSES.chromium.html
-                                              next to the executable in every Linux artifact (AppImage, deb, rpm,
-                                              Flatpak), and packaging/verify-artifact.sh fails if either file is
-                                              missing. Shipped but NOT legally reviewed: the LGPL obligations
-                                              (relinking/source offer for those components) are NEEDS REVIEW.
-                                              Electron's source for the pinned tag is at github.com/electron/electron;
-                                              SOURCE.txt records the version and sha256 of the binary.
-  - Electron Flatpak runtime/base (org.freedesktop.Platform 25.08, org.electronjs.Electron2.BaseApp 25.08, zypak)
-                                              ... pulled from flathub at install time, not redistributed in this
-                                              repository; their licences: NEEDS REVIEW
-  - electron-builder 26.18.0, @electron/fuses 2.1.3 (build tools, not shipped in artifacts) ... licences not read: NEEDS REVIEW
-  - BentoPDF logo (packaging/icons/512x512.png, copied from the upstream bundle) ... upstream AGPL repository asset;
-                                              trademark/branding permission for use as an app icon: NEEDS REVIEW
-  - Capacitor ............................... not part of any artifact yet (planned milestone); no licence read: NEEDS REVIEW when added
+  - Chromium and its bundled third-party components (inside every packaged Electron build) ... a mix of licences.
+                                              Their notices ship as LICENSES.chromium.html next to the executable in
+                                              every Linux artifact (AppImage, deb, rpm, Flatpak); the release gate
+                                              (packaging/verify-artifact.sh) fails if that file or LICENSE.electron.txt
+                                              is missing or empty.
+                                              LGPL component (FFmpeg): libffmpeg.so inside the package is a separate
+                                              shared library, FFmpeg git-2026-08-25-e5441fe421, which reports "libavformat,
+                                              libavutil, libavcodec license: LGPL version 2.1 or later" (read from the
+                                              binary with `strings`, Electron 45.1.0 download). It is dynamically loaded
+                                              and can be replaced by a rebuilt libffmpeg.so placed in the same directory.
+                                              Corresponding source: Electron v45.1.0 (github.com/electron/electron, tag
+                                              v45.1.0) pins Chromium and its third_party/ffmpeg revision in its DEPS file;
+                                              the licence text is in LICENSES.chromium.html. SOURCE.txt records the
+                                              Electron version and the sha256 of the shipped binary. This is a statement
+                                              of what is shipped and where its source is, not legal advice.
+  - Electron Flatpak runtime and base (flatpak bundle only) ... the .flatpak bundle does NOT contain
+                                              org.freedesktop.Platform 25.08 (installed from flathub at install time, not
+                                              redistributed by us). It DOES contain the files of org.electronjs.Electron2.BaseApp
+                                              25.08 that build-init merges into the app: zypak, patch-electron-desktop-filename,
+                                              dbus-glib (AFL-2.1 or GPL-2+), libappindicator, libdbusmenu, libunity, dee (LGPL-3),
+                                              libsecret (LGPL-2.1), libgnome-keyring (LGPL-2), libindicator (GPL-3 text), libspeechd
+                                              (GPL-2 text), plus their licence texts under
+                                              /app/share/licenses/org.electronjs.Electron2.BaseApp/ (read from the built tree).
+                                              Their sources are listed in /app/manifest.json inside the bundle.
+                                              zypak and patch-electron-desktop-filename have EMPTY licence directories in that
+                                              tree, so their licences are not evidenced by the bundle: NEEDS REVIEW.
+  - electron-builder 26.18.0, app-builder-lib 26.18.0, @electron/fuses 2.1.3 (build tools, not shipped in artifacts) ...
+                                              MIT [installed package.json "license"]
+  - BentoPDF logo ........................... no longer used. The application icon (packaging/icons/icon.svg and its PNG
+                                              render) is a self-made geometric document glyph, released CC0-1.0; no upstream
+                                              artwork is in the icon, desktop entries or AppStream metadata.
+  - Capacitor ............................... not part of any artifact yet (planned milestone); its licence is to be read when it is added
 
 Explicitly excluded: hyper-compress-wasm and Kura (separately licensed by the
 BentoPDF authors; not redistributed here). At upstream v2.8.10 no source file
@@ -60,7 +77,8 @@ and scripts/build-local.sh deletes them from the bundle and fails the build if
 they or the string "hyper-compress-wasm" reappear (scripts/check-dist.sh).
 Links to those pages from navbar/legal pages are not removed.
 
-No release artifact ships until every NEEDS REVIEW line above is resolved.
+No release artifact ships while any line above is still marked as unresolved. Enforced by
+packaging/check-notice.sh --release and by `packaging/verify-artifact.sh --release` (tag builds).
 
 Corresponding source for any distributed artifact: this repository at the
 commit recorded in the bundle's SOURCE.txt, plus the pinned upstream BentoPDF

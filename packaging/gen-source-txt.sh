@@ -20,7 +20,13 @@ else
   ELECTRON_ZIP_SHA="not found in the electron download cache (binary hash above still applies)"
 fi
 
+BRAND="$ROOT/desktop/brand.json"
+SOURCE_URL="$(node -p "require('$BRAND').sourceUrl")"
+UPSTREAM_URL="$(node -p "require('$BRAND').upstreamUrl")"
 OUR_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+DESCRIBE="$(git -C "$ROOT" describe --tags --always --long 2>/dev/null || echo unknown)"
+BRANCH="$(git -C "$ROOT" branch --show-current 2>/dev/null || true)"
+RELEASE_TAG="$(git -C "$ROOT" describe --tags --exact-match HEAD 2>/dev/null || echo none)"
 if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then DIRTY=yes; else DIRTY=no; fi
 UP_TAG="$(tr -d '[:space:]' < "$ROOT/UPSTREAM_VERSION")"
 UP_COMMIT="$(tr -d '[:space:]' < "$ROOT/UPSTREAM_COMMIT")"
@@ -35,13 +41,21 @@ mkdir -p "$(dirname "$OUT")"
   echo "Chromium and its bundled components: LICENSES.chromium.html."
   echo "Unofficial packaging; not affiliated with or endorsed by the BentoPDF project."
   echo
-  echo "Build recipe (this project): https://github.com/bearyjd/bentopdf-native"
+  echo "Build recipe (this project): $SOURCE_URL"
   echo "  commit:        $OUR_COMMIT"
+  echo "  describe:      $DESCRIBE"
+  echo "  release tag:   $RELEASE_TAG"
   echo "  working tree:  dirty=$DIRTY"
+  echo "  built from branch: ${BRANCH:-"(detached)"}${SOURCE_PR:+, pull request $SOURCE_URL/pull/$SOURCE_PR}"
+  echo "  Corresponding source of a RELEASE is the commit of its tag on main (git checkout <tag>)."
+  echo "  Release builds are made only from a tagged commit on main, never from a PR branch. This"
+  echo "  repository squash-merges pull requests, so a commit that exists only on a PR branch is not a"
+  echo "  durable source reference: if \"release tag\" above is none, this is NOT a release build and the"
+  echo "  commit may disappear after merge; use the tag that contains the same changes."
   if [ "$DIRTY" = yes ]; then
     echo "  WARNING: built from uncommitted changes; the commit above does not reproduce this package."
   fi
-  echo "Upstream BentoPDF source:    https://github.com/alam00000/bentopdf"
+  echo "Upstream BentoPDF source:    $UPSTREAM_URL"
   echo "  tag:           $UP_TAG"
   echo "  commit:        $UP_COMMIT"
   echo
