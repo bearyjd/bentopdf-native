@@ -27,7 +27,7 @@ async function isolation(ctx) {
   if (r.crossOriginIsolated !== true) throw new Error(`crossOriginIsolated=${r.crossOriginIsolated}`);
   if (r.sab !== 'function') throw new Error(`typeof SharedArrayBuffer=${r.sab}`);
   if (!r.secure) throw new Error('not a secure context');
-  if (r.bridge.join() !== 'handoffToInput,openFile,readFile,saveFile') throw new Error(`bridge API is ${r.bridge.join()}`);
+  if (r.bridge.join() !== 'handoffToInput,onFileOpened,openFile,readFile,saveFile,takeOpenedFiles') throw new Error(`bridge API is ${r.bridge.join()}`);
   if (r.nodeLeak !== 'undefined,undefined,undefined') throw new Error(`node globals leaked: ${r.nodeLeak}`);
   return r;
 }

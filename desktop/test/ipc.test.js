@@ -76,7 +76,7 @@ test('grants are capped per window (oldest evicted) and revoked when the window 
 test('untrusted senders are rejected on every channel', async () => {
   const h = harness({ dialogs: picking([]) });
   const evil = { sender: h.sender, senderFrame: { url: 'https://evil.example/', parent: null } };
-  for (const channel of Object.values(CHANNELS)) {
+  for (const channel of Object.values(CHANNELS).filter((c) => h.handlers.has(c))) { // fileOpened is push-only
     await assert.rejects(Promise.resolve().then(() => h.handlers.get(channel)(evil, 'x', new Uint8Array(1))), /untrusted sender/);
   }
 });

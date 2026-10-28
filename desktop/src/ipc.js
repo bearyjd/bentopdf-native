@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { CHANNELS } = require('./channels');
+const { validateOpenPath } = require('./open-file');
 
 const MAX_BYTES = 512 * 1024 * 1024;
 const GRANT_TTL_MS = 10 * 60 * 1000;
@@ -81,14 +82,15 @@ async function readRegularFile(filePath, maxBytes = MAX_BYTES) {
 function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
   const grants = new Map(); // webContents.id -> Map(token -> {filePath,name,size,expires})
 
-  const grantsFor = (event) => {
-    const id = event.sender.id;
+  const tableFor = (webContents) => {
+    const id = webContents.id;
     if (!grants.has(id)) {
       grants.set(id, new Map());
-      event.sender.once('destroyed', () => grants.delete(id));
+      webContents.once('destroyed', () => grants.delete(id));
     }
     return grants.get(id);
   };
+  const grantsFor = (event) => tableFor(event.sender);
 
   const issue = (table, filePath, size) => {
     for (const [token, grant] of table) if (grant.expires <= now()) table.delete(token);
@@ -146,9 +148,45 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
     return { saved: true, name: path.basename(chosen.filePath) };
   });
 
-  return () => {
+  // OS-initiated opens (command line, "open with"): queued until the page
+  // says it is listening (takeOpened), then pushed. A reload resets that.
+  const opened = new Map(); // webContents.id -> {listening, queue}
+  const openedFor = (webContents) => {
+    if (!opened.has(webContents.id)) {
+      const state = { listening: false, queue: [] };
+      opened.set(webContents.id, state);
+      webContents.once('destroyed', () => opened.delete(webContents.id));
+      webContents.on('did-start-navigation', (details) => {
+        if (details.isMainFrame && !details.isSameDocument) state.listening = false;
+      });
+    }
+    return opened.get(webContents.id);
+  };
+
+  ipcMain.handle(CHANNELS.takeOpened, (event) => {
+    assertTrusted(event, origin);
+    const state = openedFor(event.sender);
+    state.listening = true;
+    return state.queue.splice(0);
+  });
+
+  /**
+   * Main-process-initiated grant for a path that came from the OS, never from
+   * the renderer. Same checks as the dialog path (.pdf, regular file, size cap).
+   */
+  const openPath = async (webContents, filePath) => {
+    const { size } = await validateOpenPath(filePath, MAX_BYTES);
+    const entry = issue(tableFor(webContents), filePath, size);
+    const state = openedFor(webContents);
+    if (state.listening) webContents.send(CHANNELS.fileOpened, entry);
+    else state.queue.push(entry);
+    return entry;
+  };
+
+  const dispose = () => {
     for (const channel of Object.values(CHANNELS)) ipcMain.removeHandler(channel);
   };
+  return Object.assign(dispose, { openPath });
 }
 
 module.exports = {
