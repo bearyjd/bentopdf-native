@@ -2,7 +2,7 @@
 Type=Application
 Name=BentoPDF Native
 Comment=Offline PDF tools (unofficial BentoPDF packaging)
-Exec=bentopdf-native @@ %f @@
+Exec=bentopdf-native %f
 Icon=io.github.bearyjd.BentoPDFNative
 Terminal=false
 Categories=Office;Utility;

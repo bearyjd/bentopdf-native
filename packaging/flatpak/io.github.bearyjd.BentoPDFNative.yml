@@ -16,12 +16,16 @@ finish-args:
   - --socket=fallback-x11
   - --device=dri
   # PDFs reach the app through the file chooser portal or file forwarding
-  # (document portal paths). No --filesystem, and no --share=network: the
-  # app has no network access at all, matching its offline design.
-  - --file-forwarding
+  # (flatpak rewrites the %f in the .desktop Exec line to forward files through the
+  # document portal).
+  # No --filesystem, and no --share=network: the app has no network access
+  # at all, matching its offline design.
 modules:
   - name: bentopdf-native
     buildsystem: simple
+    build-options:
+      build-args:
+        - --unshare=network
     build-commands:
       - mkdir -p /app/lib/bentopdf-native
       - cp -a linux-unpacked/. /app/lib/bentopdf-native/

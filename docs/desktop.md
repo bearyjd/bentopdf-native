@@ -1,7 +1,9 @@
 # BentoPDF Desktop (Electron shell) - skeleton
 
-Status: M2 prototype. A thin, locked-down Electron window that serves the
-offline bundle in `./dist`. The Acrobat-style UI is M3; packaging is M4.
+Status: M2 prototype plus M4 Linux packaging
+([desktop-linux.md](desktop-linux.md)). A thin, locked-down Electron window that
+serves the offline bundle in `./dist`. The Acrobat-style UI is M3. There is no
+auto-update.
 Measured results and open problems: [m2-findings.md](m2-findings.md).
 
 ## Prerequisites
@@ -40,6 +42,8 @@ Narrow it with `BENTO_E2E_TRANSPORTS=scheme` and `BENTO_E2E_SCENARIOS=isolation,
 | `src/security.js` | window prefs, permission denial, request/navigation locks |
 | `src/failure.js` | error page on renderer crash / failed load (never a blank window) |
 | `src/ipc.js`, `channels.js`, `preload.js` | the file bridge (`window.bentoDesktop`) |
+| `src/open-file.js`, `src/menu.js` | OS "open with" paths (argv, second instance) validated and turned into grants; minimal Help/About menu |
+| `tools/`, `electron-builder.yml` | packaging: fuse hook and checker, Linux targets (see desktop-linux.md) |
 | `test/` | unit tests and the Electron scenario runner |
 
 ## Security model
@@ -84,7 +88,8 @@ Narrow it with `BENTO_E2E_TRANSPORTS=scheme` and `BENTO_E2E_SCENARIOS=isolation,
 - Robustness: renderer crash or failed main-frame load shows a static error
   page; `uncaughtException`/`unhandledRejection` are logged and exit non-zero;
   a second instance on the same profile quits (single-instance lock).
-  `BENTO_DIST`/`BENTO_TRANSPORT` are ignored when `app.isPackaged`.
+  `BENTO_DIST`/`BENTO_TRANSPORT` are ignored when `app.isPackaged`
+  (packaged, the bundle is read from `process.resourcesPath/dist`).
 
 ## Bridge API (`window.bentoDesktop`)
 
@@ -93,4 +98,6 @@ openFile(options?: { multiple?: boolean; extensions?: string[] }): Promise<{ tok
 readFile(token: string): Promise<Uint8Array>
 saveFile(suggestedName: string, bytes: Uint8Array): Promise<{ saved: boolean; name?: string }>
 handoffToInput(files: PickedFile[], selector?: string): Promise<number>  // sets <input type=file> + fires 'change'
+takeOpenedFiles(): Promise<PickedFile[]>   // PDFs the OS asked us to open (argv / open-with); drains the queue and starts push delivery
+onFileOpened(callback: (file: PickedFile) => void): () => void   // later opens (second instance); returns an unsubscribe function
 ```

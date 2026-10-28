@@ -1,7 +1,11 @@
 'use strict';
 
 // Headless smoke test of a PACKAGED build. Usage:
-//   node test/packaged-smoke.js <AppImage | path/to/bentopdf-native>
+//   node test/packaged-smoke.js <AppImage | path/to/bentopdf-native | flatpak:<app-id>>
+// For flatpak: the app is run with test-only overrides (--share=network so the
+// host can reach the DevTools port, --filesystem=<temp dir> for the test PDFs);
+// the shipped manifest grants neither. The second-instance check is skipped there
+// (each `flatpak run` has its own sandbox /tmp, so Chromium's singleton socket is not shared).
 // Launches the real artifact with --ozone-platform=headless, hostile BENTO_*
 // environment variables and a PDF argument, then drives the page over the
 // Chromium DevTools protocol (a Chromium flag, so it needs no hook in the app).
@@ -43,10 +47,14 @@ async function until(fn, ms, what) {
 // SMOKE_EXTRA_ARGS exists only for negative controls (e.g. --no-sandbox must make this test fail).
 const extra = (process.env.SMOKE_EXTRA_ARGS || '').split(' ').filter(Boolean);
 const appArgs = ['--ozone-platform=headless', '--remote-debugging-port=0', `--user-data-dir=${profile}`, ...extra];
+const isFlatpak = target.startsWith('flatpak:');
 const launch = (files) => {
   const isImage = target.endsWith('.AppImage');
-  const args = [...(isImage ? ['--appimage-extract-and-run'] : []), ...appArgs, ...files];
-  const child = spawn(target, args, {
+  const command = isFlatpak ? 'flatpak' : target;
+  const args = isFlatpak
+    ? ['run', '--user', '--share=network', `--filesystem=${work}`, target.slice('flatpak:'.length), ...appArgs, ...files]
+    : [...(isImage ? ['--appimage-extract-and-run'] : []), ...appArgs, ...files];
+  const child = spawn(command, args, {
     detached: true,
     stdio: ['ignore', 'ignore', 'pipe'],
     // The packaged app must ignore all of these.
@@ -100,6 +108,15 @@ class Cdp {
   }
 }
 
+async function secondInstance(cdp) {
+  await cdp.js('window.__opened = []; window.bentoDesktop.onFileOpened((f) => window.__opened.push(f.name)); true');
+  const second = launch([pdfB]);
+  const exited = await until(() => second.child.exitCode !== null && { code: second.child.exitCode }, 60000, 'second instance exit').catch(() => ({ code: 'timeout' }));
+  check('second instance exits cleanly', exited.code === 0, `exit=${exited.code}`);
+  check('second instance forwarded its PDF to the first', await until(() => cdp.js('window.__opened.includes("second.pdf")'), 20000, 'forwarded file').catch(() => false));
+  try { process.kill(-second.child.pid, 'SIGKILL'); } catch { /* gone */ }
+}
+
 async function main() {
   const first = launch([pdfA]);
   try {
@@ -151,12 +168,7 @@ async function main() {
     check('granted file is readable via its token', head === '%PDF-1.4', head);
 
     // Second instance forwards its file to the first (single-instance lock).
-    await cdp.js('window.__opened = []; window.bentoDesktop.onFileOpened((f) => window.__opened.push(f.name)); true');
-    const second = launch([pdfB]);
-    const exited = await until(() => second.child.exitCode !== null && { code: second.child.exitCode }, 60000, 'second instance exit').catch(() => ({ code: 'timeout' }));
-    check('second instance exits cleanly', exited.code === 0, `exit=${exited.code}`);
-    check('second instance forwarded its PDF to the first', await until(() => cdp.js('window.__opened.includes("second.pdf")'), 20000, 'forwarded file').catch(() => false));
-    try { process.kill(-second.child.pid, 'SIGKILL'); } catch { /* gone */ }
+    if (!isFlatpak) await secondInstance(cdp);
   } finally {
     try { process.kill(-first.child.pid, 'SIGTERM'); } catch { /* gone */ }
     await wait(1500);

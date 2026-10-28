@@ -88,18 +88,49 @@ Signing keys/certs are never committed; env vars or CI secrets only.
 
 ## M4 entry criteria (do not start packaging before these have an answer)
 
-- Chromium sandbox strategy for AppImage and Flatpak. **No `--no-sandbox`.**
+Status after the Linux packaging pass (details and commands:
+[desktop-linux.md](desktop-linux.md)). `[x]` means demonstrated on the dev
+host (Fedora/Bazzite, Electron 45.1.0, headless) with the evidence named;
+anything not proven says NOT VERIFIED.
+
+- [x] Chromium sandbox strategy for AppImage and Flatpak. **No `--no-sandbox`.**
   Prove the renderer is actually sandboxed in each artifact.
-- Electron fuses: RunAsNode off, NODE_OPTIONS off, inspect arguments off,
-  OnlyLoadAppFromAsar on, cookie encryption on.
-- asar vs unpacked decision for the WASM payloads (Range reads, size).
-- `BENTO_DIST` / `BENTO_TRANSPORT` and any other environment overrides disabled
-  in release (the entry point already ignores them when `app.isPackaged`; verify
-  in the artifact).
-- Desktop entry, MIME type and file association for `.pdf`.
-- Wayland flags (ozone platform selection) decided and tested.
-- Deliberately no auto-update; say so in the docs.
-- Ship Electron's `LICENSE` and `LICENSES.chromium.html`, and verify both are
-  inside the built artifact (see NOTICE).
-- `SOURCE.txt` provenance for the Electron binary (version and checksum).
-- AGPL corresponding-source offer reachable from Help/About.
+  AppImage: user-namespace sandbox; headless smoke test reads
+  `/proc/<renderer>/status`: `Seccomp: 2`, `NoNewPrivs: 1`, `CapEff: 0`, own
+  user namespace. Flatpak: zypak sub-sandbox, same `/proc` values from the
+  installed Flatpak. Negative control: `--no-sandbox` makes the test fail
+  (`Seccomp: 0`). Hosts without user namespaces: hardened AppRun refuses to
+  start with a message (simulated by a failing `unshare`, not on a real
+  AppArmor-restricted Ubuntu: NOT VERIFIED there). deb/rpm setuid
+  `chrome-sandbox` path: NOT VERIFIED (cannot install here).
+- [x] Electron fuses: RunAsNode off, NODE_OPTIONS off, inspect arguments off,
+  OnlyLoadAppFromAsar on, cookie encryption on (plus asar-integrity on,
+  file-protocol privileges off). `desktop/tools/check-fuses.js` reads the
+  built binary; 7 of 7 in unpacked, AppImage, deb and rpm. Whether asar
+  integrity is *enforced* on Linux: NOT VERIFIED.
+- [x] asar vs unpacked decision for the WASM payloads (Range reads, size):
+  app code in `app.asar` (48 KB), 368 MB / 4,394-file payload as an
+  extraResource outside it; file list identical to `dist/`.
+- [x] `BENTO_DIST` / `BENTO_TRANSPORT` and any other environment overrides
+  disabled in release: static check of the extracted `main.js` in every
+  artifact plus the AppImage and Flatpak smoke runs with hostile values set
+  (Flatpak does not forward the caller's environment, so that run proves less).
+- [x] Desktop entry, MIME type and file association for `.pdf`: in all four
+  formats (`verify-artifact.sh` for AppImage/deb/rpm, `desktop-file-validate` and
+  `appstreamcli validate` for the Flatpak files). End-to-end open-with is proven
+  at the argv/second-instance level (smoke test); a real file manager launch
+  is NOT VERIFIED.
+- [x] Wayland flags decided: `--ozone-platform-hint=auto` in entries and the
+  Flatpak wrapper. Tested only headless; a visible Wayland/X11 window is NOT VERIFIED.
+- [x] Deliberately no auto-update; stated in desktop-linux.md and in the About dialog.
+- [x] Ship Electron's `LICENSE` and `LICENSES.chromium.html`, verified inside
+  each built AppImage/deb/rpm by `packaging/verify-artifact.sh` (Flatpak ships
+  the same tree; the gate was not run against the Flatpak bundle).
+- [x] `SOURCE.txt` provenance for the Electron binary (version and checksum),
+  plus repo SHA, upstream tag/commit, build date.
+- [x] AGPL corresponding-source offer reachable from Help/About (unit-tested
+  text and menu wiring; the dialog itself was not opened: NOT VERIFIED visually).
+
+Still open for M4: macOS/Windows packaging (CI only, not built), signing and
+notarization hooks, the 100+ MB PDF and multi-page OCR memory report, and a
+real run of `.github/workflows/desktop-linux.yml` on GitHub (NOT VERIFIED).

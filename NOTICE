@@ -33,13 +33,22 @@ installed package at the versions the build uses). They are NOT a legal review.
                                               rawcdn.githack.com; no licence file is fetched): NEEDS REVIEW
   - xlsx (SheetJS) 0.20.3 ................... Apache-2.0       [upstream package-lock.json "license"]
   - Other npm dependencies bundled by vite .. see upstream package-lock.json; not enumerated here: NEEDS REVIEW
-  - Electron 45.1.0 (desktop/ shell) ........ MIT             [Electron's own licence; not yet read from the installed
-                                                              package for this repo: NEEDS REVIEW]
+  - Electron 45.1.0 (desktop/ shell) ........ MIT             [LICENSE of the electron-v45.1.0-linux-x64 download, shipped as
+                                                              LICENSE.electron.txt inside every Linux artifact]
   - Chromium and its bundled third-party components (inside every packaged Electron build) ... a mix of licences,
-                                              including LGPL parts. Their notices ship in the Electron
-                                              distribution as LICENSES.chromium.html and LICENSE. RELEASE-GATING:
-                                              no desktop artifact ships until both files are verified to be inside
-                                              the packaged artifact and the LGPL obligations are reviewed: NEEDS REVIEW
+                                              including LGPL parts. Their notices ship as LICENSES.chromium.html
+                                              next to the executable in every Linux artifact (AppImage, deb, rpm,
+                                              Flatpak), and packaging/verify-artifact.sh fails if either file is
+                                              missing. Shipped but NOT legally reviewed: the LGPL obligations
+                                              (relinking/source offer for those components) are NEEDS REVIEW.
+                                              Electron's source for the pinned tag is at github.com/electron/electron;
+                                              SOURCE.txt records the version and sha256 of the binary.
+  - Electron Flatpak runtime/base (org.freedesktop.Platform 25.08, org.electronjs.Electron2.BaseApp 25.08, zypak)
+                                              ... pulled from flathub at install time, not redistributed in this
+                                              repository; their licences: NEEDS REVIEW
+  - electron-builder 26.18.0, @electron/fuses 2.1.3 (build tools, not shipped in artifacts) ... licences not read: NEEDS REVIEW
+  - BentoPDF logo (packaging/icons/512x512.png, copied from the upstream bundle) ... upstream AGPL repository asset;
+                                              trademark/branding permission for use as an app icon: NEEDS REVIEW
   - Capacitor ............................... not part of any artifact yet (planned milestone); no licence read: NEEDS REVIEW when added
 
 Explicitly excluded: hyper-compress-wasm and Kura (separately licensed by the
