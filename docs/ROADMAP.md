@@ -25,8 +25,10 @@ operates on the document in the active tab. Fully offline.
 
 - AGPL-3.0 throughout; NOTICE credits upstream and libraries. No release ships
   while any NOTICE line is UNVERIFIED.
-- `hyper-compress-wasm` is imported by default (`src/js/utils/compress.ts`) and
-  is separately licensed: exclude via patch/`DISABLE_TOOLS`. Same for Kura.
+- `hyper-compress-wasm` and Kura are separately licensed and must not ship.
+  Checked at v2.8.10: nothing imports them (no patch needed); only their
+  marketing pages exist, which the local-bundle build removes. Re-check on every
+  `UPSTREAM_VERSION` bump.
 - Upstream CLA means nothing here can be merged upstream without the owner
   signing the ICLA; this repo stays AGPL-only.
 - Overlap: upstream issue #219 reply says a reader-style UX "will be a part of

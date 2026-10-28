@@ -21,8 +21,10 @@ own license; verify versions in the upstream lockfile at build time):
   - Capacitor ............... MIT
 
 Explicitly excluded: hyper-compress-wasm and Kura (separately licensed by the
-BentoPDF authors; not redistributed here). Upstream imports hyper-compress-wasm
-in compress.ts, so excluding it requires a patch (see docs/ROADMAP.md, M1).
+BentoPDF authors; not redistributed here). At upstream v2.8.10 no source file
+imports hyper-compress-wasm (grep of src/ and package.json/package-lock.json
+finds none); only the kura.html and hyper-compress.html marketing pages exist,
+and scripts/build-local.sh deletes them from the bundle (docs/local-bundle.md).
 
 No release artifact ships until every UNVERIFIED line above is resolved.
 
