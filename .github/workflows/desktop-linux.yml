@@ -5,6 +5,13 @@ name: desktop-linux
 # and executes upstream BentoPDF code (npm install and vite build), which must
 # never run on untrusted PR code. Signing and release publishing are out of
 # scope here (no secrets are used).
+#
+# `paths:` and tags: GitHub's workflow syntax reference states "Path filters are not
+# evaluated for pushes of tags", so the paths list below limits only the main-branch
+# trigger and every v* tag push builds (checked against the docs 2026-10-28).
+# Action pins were checked with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>`
+# (annotated tags dereferenced) on 2026-10-28: checkout v7.0.1, setup-node v7.1.0 and
+# upload-artifact v7.0.2 each resolve to the SHA pinned below.
 on:
   workflow_dispatch:
   push:
@@ -58,7 +65,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends rpm cpio
 
       - name: Lint shell scripts
-        run: shellcheck -S warning scripts/*.sh packaging/*.sh packaging/*/*.sh packaging/linux/AppRun
+        run: shellcheck -S warning scripts/*.sh packaging/*.sh packaging/*/*.sh packaging/linux/AppRun packaging/flatpak/launcher.sh.in
 
       - name: Install desktop dependencies
         working-directory: desktop
@@ -69,6 +76,9 @@ jobs:
         run: |
           npm run lint
           node --test --test-concurrency=1 test/open-file.test.js test/argv-policy.test.js test/normalise-modes.test.js test/brand.test.js test/ipc.test.js test/security.test.js test/headers.test.js test/static-files.test.js test/transport-http.test.js
+
+      - name: Mutation test of the NOTICE check
+        run: bash packaging/test-check-notice.sh
 
       - name: Licence gate (NOTICE)
         id: notice
