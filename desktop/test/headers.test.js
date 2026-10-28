@@ -38,6 +38,46 @@ test('fails closed on unsafe-eval / unsafe-inline in script-src unless allowlist
   assert.doesNotThrow(() => buildAppHeaders(dist(["Content-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'self'"])));
 });
 
+const REJECTED = {
+  'unsafe-inline': "'unsafe-inline'",
+  'unsafe-hashes': "'unsafe-hashes'",
+  'strict-dynamic': "'strict-dynamic'",
+  wildcard: '*',
+  'data:': 'data:',
+  'filesystem:': 'filesystem:',
+  'scheme source': 'wss:',
+  'host source': '//evil.com',
+  'bare host': 'evil.com',
+  hash: "'sha256-AAAA'",
+  nonce: "'nonce-abc'",
+  'blob: outside worker-src': 'blob:',
+};
+for (const directive of ['script-src', 'script-src-elem', 'script-src-attr', 'worker-src']) {
+  for (const [label, token] of Object.entries(REJECTED)) {
+    // blob: is accepted in worker-src and stripped (not refused) from script-src; see the tightenCsp test.
+    if (token === 'blob:' && (directive === 'worker-src' || directive === 'script-src')) continue;
+    test(`${directive} rejects ${label}`, () => {
+      const csp = `Content-Security-Policy: default-src 'self'; ${directive} 'self' ${token}`;
+      assert.throws(() => buildAppHeaders(dist([csp])), /allowlist/, csp);
+    });
+  }
+}
+
+test('default-src is held to the allowlist only when script-src is absent', () => {
+  for (const token of Object.values(REJECTED)) {
+    assert.throws(() => buildAppHeaders(dist([`Content-Security-Policy: default-src 'self' ${token}`])), /allowlist/, token);
+  }
+  assert.doesNotThrow(() => buildAppHeaders(dist([`Content-Security-Policy: default-src 'self' data:; script-src 'self'`])));
+});
+
+test('allowlisted tokens pass; blob: is accepted in worker-src only', () => {
+  assert.doesNotThrow(() => buildAppHeaders(dist(["Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; script-src-elem 'self'; script-src-attr 'none'; worker-src 'self' blob:"])));
+});
+
+test('only the first occurrence of a directive counts, as in the browser', () => {
+  assert.throws(() => buildAppHeaders(dist(["Content-Security-Policy: script-src 'self' *; script-src 'self'"])), /allowlist/);
+});
+
 test('refuses missing CSP, external origins and a dist/docs directory', () => {
   assert.throws(() => buildAppHeaders(dist(['X-Frame-Options: DENY'])), /no Content-Security-Policy/);
   assert.throws(() => buildAppHeaders(dist(["Content-Security-Policy: default-src 'self' https://cdn.example"])), /external/);
