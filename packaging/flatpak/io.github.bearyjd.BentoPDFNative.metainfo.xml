@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.bearyjd.BentoPDFNative</id>
+  <name>BentoPDF Native</name>
+  <summary>Offline PDF tools in a locked-down desktop shell (unofficial)</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <developer id="io.github.bearyjd">
+    <name>bearyjd and contributors</name>
+  </developer>
+  <description>
+    <p>
+      BentoPDF Native runs the BentoPDF toolset (merge, split, compress, OCR, convert and more)
+      entirely offline in a sandboxed Electron window. Documents never leave your computer; the
+      application makes no network requests and has no network permission in this package.
+    </p>
+    <p>
+      This is an unofficial, community-built packaging of BentoPDF. It is not affiliated with or
+      endorsed by the BentoPDF project. The application never updates itself.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.bearyjd.BentoPDFNative.desktop</launchable>
+  <url type="homepage">https://github.com/bearyjd/bentopdf-native</url>
+  <url type="bugtracker">https://github.com/bearyjd/bentopdf-native/issues</url>
+  <url type="vcs-browser">https://github.com/bearyjd/bentopdf-native</url>
+  <provides>
+    <binary>bentopdf-native</binary>
+    <mediatype>application/pdf</mediatype>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <categories>
+    <category>Office</category>
+    <category>Utility</category>
+  </categories>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-10-28" />
+  </releases>
+</component>

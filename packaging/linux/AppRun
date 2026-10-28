@@ -1,0 +1,29 @@
+#!/bin/sh
+# AppRun for the BentoPDF Native AppImage. Replaces electron-builder's, which
+# silently appends --no-sandbox when user namespaces are unavailable. Here the
+# app either runs with Chromium's sandbox or does not run, and says why.
+set -eu
+
+HERE="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+export PATH="$HERE:$HERE/usr/sbin${PATH:+:$PATH}"
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+refuse() {
+  msg="BentoPDF Native cannot start: Chromium's sandbox needs unprivileged user namespaces and this system does not allow them.
+
+Typical causes: Ubuntu 23.10+/24.04 (AppArmor kernel.apparmor_restrict_unprivileged_userns=1), or kernel.unprivileged_userns_clone=0 / user.max_user_namespaces=0.
+
+BentoPDF Native will not run without its sandbox. Use the .deb/.rpm package (setuid sandbox) or the Flatpak, or ask your administrator to allow user namespaces for this application."
+  printf '%s\n' "$msg" >&2
+  if [ -x /usr/bin/zenity ]; then LD_LIBRARY_PATH='' zenity --error --no-markup --text "$msg" 2>/dev/null || true
+  elif [ -x /usr/bin/kdialog ]; then LD_LIBRARY_PATH='' kdialog --error "$msg" 2>/dev/null || true
+  fi
+  exit 1
+}
+
+# If `unshare` is missing we cannot tell; let Chromium decide (it aborts with its own error, it never runs unsandboxed).
+if command -v unshare >/dev/null 2>&1 && ! unshare -Ur true 2>/dev/null; then
+  refuse
+fi
+
+exec "$HERE/bentopdf-native" "$@"

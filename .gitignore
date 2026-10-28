@@ -25,3 +25,4 @@ keystore.properties
 # Packaging outputs
 desktop/release/
 packaging/generated/
+packaging/flatpak/.build/
