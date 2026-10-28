@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  hygiene:
+    name: Repo hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: No signing material or env files tracked
+        run: |
+          git ls-files -z > "$RUNNER_TEMP/files.nul"
+          if grep -zqP '\n' "$RUNNER_TEMP/files.nul"; then echo "Tracked filename contains a newline"; exit 1; fi
+          rc=0
+          grep -zEi '(^|/)\.env/|\.(jks|keystore|p12|pkcs12|pfx|pem|p8|key|crt|der|gpg|asc|p7b|mobileprovision|cer)$|(^|/)(keystore\.properties|key\.properties|signing\.properties|google-services\.json|id_rsa[^/]*|\.envrc)$|(^|/)[^/]*\.env(\.[^/]*)?$|(^|/)\.env(\.[^/]*)?$' "$RUNNER_TEMP/files.nul" > "$RUNNER_TEMP/hits.nul" || rc=$?
+          if [ "$rc" -gt 1 ]; then echo "check errored (rc=$rc)"; exit 2; fi
+          rc=0; grep -zvE '(^|/)\.env\.(example|sample)$' "$RUNNER_TEMP/hits.nul" | tr '\0' '\n' > "$RUNNER_TEMP/forbidden.txt" || rc=$?
+          if [ "$rc" -gt 1 ]; then echo "filter errored (rc=$rc)"; exit 2; fi
+          if [ -s "$RUNNER_TEMP/forbidden.txt" ]; then echo "Forbidden files tracked:"; cat "$RUNNER_TEMP/forbidden.txt"; exit 1; fi
+      - name: No obvious secrets in tree or history
+        run: |
+          pat='-----BEGIN ([A-Z]+ )*PRIVATE KEY( BLOCK)?-----|(ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{50,}|glpat-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|(AKIA|ASIA)[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|sk_(live|test)_[0-9A-Za-z]{20,}'
+          git log --all -m -p --text --no-textconv --no-color > "$RUNNER_TEMP/history.txt"
+          rc=0; grep -qE -e "$pat" "$RUNNER_TEMP/history.txt" || rc=$?
+          if [ "$rc" -eq 0 ]; then echo "Possible secret committed (in tree or history); matching content not printed to avoid republishing it"; exit 1; fi
+          if [ "$rc" -ne 1 ]; then echo "secret scan errored (grep rc=$rc)"; exit 2; fi
+      - name: AGPL license present
+        run: grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE
+
+  shellcheck:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: shellcheck (by extension and by first-line shebang)
+        run: |
+          sh_re='^#![[:space:]]*(/usr/bin/env[[:space:]]+(-S[[:space:]]+)?|/[^[:space:]]*/)(ba|da|k)?sh([[:space:]]|$)'
+          git ls-files -z > "$RUNNER_TEMP/all.nul"
+          : > "$RUNNER_TEMP/scripts.list"
+          while IFS= read -r -d '' f; do
+            { [ -f "$f" ] && [ ! -L "$f" ]; } || continue
+            case "$f" in
+              *.sh|*.bash) printf '%s\0' "$f" >> "$RUNNER_TEMP/scripts.list"; continue ;;
+            esac
+            first=$(head -n1 -- "$f" 2>/dev/null | tr -d '\0' | head -c 200 | sed '1s/^\xEF\xBB\xBF//' || true)
+            if [[ "$first" =~ $sh_re ]]; then printf '%s\0' "$f" >> "$RUNNER_TEMP/scripts.list"; fi
+          done < "$RUNNER_TEMP/all.nul"
+          if [ ! -s "$RUNNER_TEMP/scripts.list" ]; then echo "no shell scripts"; exit 0; fi
+          xargs -0 shellcheck -S warning -- < "$RUNNER_TEMP/scripts.list"
