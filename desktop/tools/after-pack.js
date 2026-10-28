@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { flipFuses } = require('@electron/fuses');
 const { EXPECTED_FUSES, FuseVersion } = require('./fuse-config');
+const { normaliseModes } = require('./normalise-modes');
 
 module.exports = async function afterPack(context) {
   const exe = path.join(context.appOutDir, context.packager.executableName);
@@ -13,4 +14,5 @@ module.exports = async function afterPack(context) {
   // Electron's placeholder app; unused once app.asar exists.
   fs.rmSync(path.join(context.appOutDir, 'resources', 'default_app.asar'), { force: true });
   process.stderr.write(`[fuses] flipped on ${exe}\n`);
+  process.stderr.write(`[modes] normalised ${normaliseModes(context.appOutDir)} entries\n`);
 };
