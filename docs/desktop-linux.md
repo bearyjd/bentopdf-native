@@ -147,17 +147,38 @@ it exists in every Electron app; `src/argv-policy.js` refuses it (below).
 
 ## Launch arguments and environment
 
-`src/argv-policy.js` is applied to the first launch's `process.argv` (exit code 2,
-logged) and to every second-instance `argv` (the whole invocation is dropped, logged).
-Refused: switches that turn the sandbox off, `--disable-web-security`, any `--inspect*`,
-any `--js-flags`, proxy/host rewriting, extension loading, and
-`--remote-debugging-*` (the port/pipe forms are allowed only together with
-`--ozone-platform=headless`, which cannot show a window; that is how the packaged smoke
-test drives the real artifact). Chromium reads its own switches before any script runs, so
-for the first launch this is a fail-closed tripwire, not a filter. `AppRun` and the Flatpak
-launcher also `unset ELECTRON_DISABLE_SANDBOX ELECTRON_RUN_AS_NODE NODE_OPTIONS`.
-deb/rpm entries start the binary directly; there the fuses cover RUN_AS_NODE and NODE_OPTIONS,
-and `ELECTRON_DISABLE_SANDBOX` is the user's own environment (NOT mitigated for deb/rpm).
+`src/argv-policy.js` is an **allowlist**, applied to the first launch's `process.argv`
+(exit code 2, logged) and to every second-instance `argv` (the whole invocation is dropped,
+logged). Any argument that starts with a dash is a switch and is refused unless it is exactly
+`--ozone-platform-hint=auto|wayland|x11`. This is an allowlist because a denylist is bypassable:
+on POSIX Chromium also honours a **single** dash. Measured on the unpackaged app with Electron
+45.1.0, headless: `-remote-debugging-port=0` opened a DevTools port (`DevToolsActivePort` written,
+"DevTools listening" printed) and `-no-sandbox` was reported by `app.commandLine.hasSwitch`, exactly
+like their double-dash forms. Matching is case-sensitive and exact, so `-no-sandbox`, `--NO-SANDBOX`,
+`--no-zygote`, `--renderer-cmd-prefix`, `--browser-subprocess-path`, `--user-data-dir`,
+`--proxy-server`, `--allow-file-access-from-files`, `--enable-features=`/`--disable-features=`,
+`--disable-blink-features` and the rest are all refused (unit-tested). A bare `--` ends the options:
+what follows is a file argument and still goes through the open-with validation. Only when
+`BENTO_TEST_HEADLESS=1` is in the environment (the test harness sets it) are
+`--ozone-platform=headless`, `--remote-debugging-port=<n>`, `--remote-debugging-pipe` and
+`--user-data-dir=<dir>` also accepted; that is how the packaged smoke test drives the real artifact.
+Chromium reads its own switches before any script runs, so for the first launch this is a
+fail-closed tripwire, not a filter.
+
+Environment: `src/main.js` begins by exiting with code 2 if `ELECTRON_DISABLE_SANDBOX` or
+`CHROME_DEVEL_SANDBOX` is set (the sandbox is already off by then, but no window or renderer is
+created). `AppRun` and the Flatpak launcher additionally
+`unset ELECTRON_DISABLE_SANDBOX CHROME_DEVEL_SANDBOX ELECTRON_EXTRA_LAUNCH_ARGS ELECTRON_ENABLE_LOGGING ELECTRON_RUN_AS_NODE NODE_OPTIONS`;
+the gate requires every one of them in that line. deb/rpm entries start the binary directly; there
+the fuses cover RUN_AS_NODE and NODE_OPTIONS and the `main.js` refusal covers the sandbox variables;
+`ELECTRON_EXTRA_LAUNCH_ARGS` and `ELECTRON_ENABLE_LOGGING` are the user's own environment (NOT
+mitigated for deb/rpm). Windows are created with `sandbox: true` (asserted in
+`test/security.test.js`) and the packaged smoke test checks the seccomp/no-new-privs/capability state
+of every renderer.
+
+An open-with grant records the file's device and inode, is opened with `O_NOFOLLOW` (the path is
+already resolved), and `readFile` refuses it if the inode changed or the content no longer starts
+with `%PDF-`. Dialog grants record dev/ino too.
 
 "Open with" accepts only file arguments and `file://` URLs. A path is resolved with
 `realpath`, must be a regular file of at most 512 MiB and must start with `%PDF-`
@@ -295,7 +316,7 @@ fails (after a positive control that the unmodified trees pass): missing/empty l
 or SOURCE.txt; wrong SOURCE.txt commit, dirty flag, repository URL, tag line; a flipped fuse;
 `--no-sandbox` in AppRun or a desktop Exec; 0777/0666/group-writable files and directories; setuid
 and setgid files; a setuid or missing `chrome-sandbox`; dropped About/AGPL/source-offer strings; a
-re-enabled `BENTO_*` override; `process.env` read elsewhere; argv policy or magic-byte check removed; a
+re-enabled `BENTO_*` override; `process.env` read elsewhere; argv policy or magic-byte check removed; a shortened `unset` list in AppRun or the Flatpak launcher; the `main.js` sandbox-env refusal removed; a
 forbidden flag inside the asar; no `.desktop` file at all (empty glob); missing asar, bundle index or
 executable; weakened post-install script; Flatpak x11/network/filesystem permissions; `--release`
 on an unresolved NOTICE. Missing or empty inputs fail, never skip. CI runs it with `--no-flatpak`.
@@ -331,7 +352,9 @@ or AppStream metadata. The bundled upstream pages still contain upstream brandin
 
 Everything that carries the product name, app id, executable name, window class or
 source URL is derived from **one file: `desktop/brand.json`** (`productName`, `appId`,
-`executableName`, `summary`, `sourceUrl`, `upstreamUrl`). To rename:
+`executableName`, `iconPng`, `summary`, `sourceUrl`, `upstreamUrl`). Values are validated by strict
+patterns (`desktop/tools/brand-check.js`: no quotes, `$`, backticks, `&`, `<`, newlines; https URLs only)
+in `render-template.js` and `test/brand.test.js`, and are XML-escaped into the metainfo. To rename:
 
 1. Edit `desktop/brand.json`.
 2. Rebuild (`scripts/package-linux.sh`, `packaging/flatpak/build-flatpak.sh`).

@@ -110,8 +110,11 @@ host (Fedora/Bazzite, Electron 45.1.0, headless) with the evidence named;
   extraResource outside it; file list identical to `dist/`.
 - [x] `BENTO_DIST` / `BENTO_TRANSPORT` and other environment overrides disabled in release:
   static check of the extracted `main.js` in every artifact plus AppImage and Flatpak smoke runs
-  with hostile values. Launch switches that disable the sandbox, enable inspect or `--js-flags` are
-  refused (`src/argv-policy.js`, unit-tested).
+  with hostile values. Every launch switch not on an allowlist is
+  refused, single-dash spellings included (Chromium honours `-remote-debugging-port=0` on Linux:
+  measured on Electron 45.1.0), and `main.js` exits 2 if `ELECTRON_DISABLE_SANDBOX` or
+  `CHROME_DEVEL_SANDBOX` is set (`src/argv-policy.js`, `src/main.js`, unit-tested). Not mitigated for
+  deb/rpm: `ELECTRON_EXTRA_LAUNCH_ARGS` / `ELECTRON_ENABLE_LOGGING` in the user's own environment.
 - [~] Desktop entry, MIME type and file association for `.pdf`: present and gated in all four
   formats (`verify-artifact.sh`; Flatpak files also by `desktop-file-validate`/`appstreamcli`). Open-with
   is proven at argv/second-instance level only (smoke test); a real file-manager launch is NOT VERIFIED.
