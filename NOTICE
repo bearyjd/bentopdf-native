@@ -33,7 +33,14 @@ installed package at the versions the build uses). They are NOT a legal review.
                                               rawcdn.githack.com; no licence file is fetched): NEEDS REVIEW
   - xlsx (SheetJS) 0.20.3 ................... Apache-2.0       [upstream package-lock.json "license"]
   - Other npm dependencies bundled by vite .. see upstream package-lock.json; not enumerated here: NEEDS REVIEW
-  - Electron, Capacitor ..................... not part of any artifact yet (planned milestones); no licence read: NEEDS REVIEW when added
+  - Electron 45.1.0 (desktop/ shell) ........ MIT             [Electron's own licence; not yet read from the installed
+                                                              package for this repo: NEEDS REVIEW]
+  - Chromium and its bundled third-party components (inside every packaged Electron build) ... a mix of licences,
+                                              including LGPL parts. Their notices ship in the Electron
+                                              distribution as LICENSES.chromium.html and LICENSE. RELEASE-GATING:
+                                              no desktop artifact ships until both files are verified to be inside
+                                              the packaged artifact and the LGPL obligations are reviewed: NEEDS REVIEW
+  - Capacitor ............................... not part of any artifact yet (planned milestone); no licence read: NEEDS REVIEW when added
 
 Explicitly excluded: hyper-compress-wasm and Kura (separately licensed by the
 BentoPDF authors; not redistributed here). At upstream v2.8.10 no source file
