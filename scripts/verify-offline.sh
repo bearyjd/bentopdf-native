@@ -60,7 +60,7 @@ find . -type f \( -name '*.html' -o -name '*.js' -o -name '*.mjs' -o -name '*.cs
       }
       END { print STDERR "scanned $nfiles text files\n" }
     ' 2> "$T/scan.err" > "$T/raw.tsv"
-awk -F'\t' -v re="$NOISE_RE" '$2 !~ re' "$T/raw.tsv" > "$T/hits.tsv"
+NOISE_RE="$NOISE_RE" awk -F'\t' '$2 !~ ENVIRON["NOISE_RE"]' "$T/raw.tsv" > "$T/hits.tsv"
 
 echo "Scanned $(awk '{print $2}' "$T/scan.err") text files under $DIST"
 echo "(engine dirs scanned for CDN-like hosts only: wasm/pymupdf, wasm/gs, wasm/ocr/core, libreoffice-wasm, pdfjs-*viewer)"
