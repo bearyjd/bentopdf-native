@@ -3,7 +3,7 @@
 # deb/rpm post-install script (electron-builder template: ${executable} and
 # ${sanitizedProductName} are replaced at build time; do not use other ${...} forms).
 #
-# Sandbox policy, fail-closed (the app never runs with --no-sandbox):
+# Sandbox policy, fail-closed (the app never runs with its sandbox switched off):
 #   - The payload ships chrome-sandbox as root:root 0755 (NOT setuid), so there is no
 #     window between unpack and this script in which a setuid helper exists.
 #   - Unprivileged user namespaces work for an ordinary user  -> keep 0755.
