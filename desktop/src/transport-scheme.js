@@ -8,24 +8,24 @@ const SCHEME = 'bento';
 const ORIGIN = `${SCHEME}://app`;
 
 /**
- * Must run before app 'ready'. Service workers are OFF by default: sw.js
- * calls Cache.put() on every asset, which rejects non-http(s) URLs, so with
- * the privilege granted every cached asset fetch fails (see docs/m2-findings.md).
+ * Privileges of the app scheme. Service workers are OFF: sw.js calls
+ * Cache.put() on every asset, which rejects non-http(s) URLs, so with the
+ * privilege granted every cached asset fetch fails (see docs/m2-findings.md).
+ * Pinned by test/security.test.js.
  */
-function registerScheme({ allowServiceWorkers = false } = {}) {
-  protocol.registerSchemesAsPrivileged([
-    {
-      scheme: SCHEME,
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        corsEnabled: true,
-        stream: true,
-        allowServiceWorkers,
-      },
-    },
-  ]);
+function schemePrivileges({ allowServiceWorkers = false } = {}) {
+  return {
+    standard: true,
+    secure: true,
+    supportFetchAPI: true,
+    stream: true,
+    allowServiceWorkers,
+  };
+}
+
+/** Must run before app 'ready'. */
+function registerScheme(options = {}) {
+  protocol.registerSchemesAsPrivileged([{ scheme: SCHEME, privileges: schemePrivileges(options) }]);
 }
 
 function toWebBody(body) {
@@ -55,4 +55,4 @@ function startSchemeTransport({ rootReal, headers }) {
   return { origin: ORIGIN, close: () => protocol.unhandle(SCHEME) };
 }
 
-module.exports = { registerScheme, startSchemeTransport, SCHEME, ORIGIN };
+module.exports = { registerScheme, schemePrivileges, startSchemeTransport, SCHEME, ORIGIN };

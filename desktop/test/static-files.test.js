@@ -79,8 +79,27 @@ test('range requests: 206, suffix, open-ended, 416', async () => {
   assert.equal(await text(await get('/data.bin', { range: 'bytes=-3' })), '789');
   assert.equal(await text(await get('/data.bin', { range: 'bytes=8-' })), '89');
   assert.equal((await get('/data.bin', { range: 'bytes=50-' })).status, 416);
-  assert.equal((await get('/data.bin', { range: 'bytes=5-2' })).status, 416);
-  assert.equal((await get('/data.bin', { range: 'items=1-2' })).status, 200);
+  assert.equal((await get('/data.bin', { range: 'bytes=-0' })).status, 416);
+});
+
+test('range requests: syntactically invalid or unsupported ranges are ignored (RFC 9110)', async () => {
+  for (const range of ['bytes=5-2', 'items=1-2', 'bytes=-', 'bytes=a-b', 'bytes=0-1,3-4', 'bytes=', '', 'bytes=99999999999999999999-']) {
+    const r = await get('/data.bin', { range });
+    assert.equal(r.status, 200, range);
+    assert.equal(r.headers['Content-Range'], undefined, range);
+    assert.equal(await text(r), '0123456789', range);
+  }
+});
+
+test('dotfiles, _headers and _redirects are never served', async () => {
+  fs.writeFileSync(path.join(root, '.env'), 'SECRET=1');
+  fs.writeFileSync(path.join(root, '_headers'), '/*\n  A: 1');
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.git', 'config'), 'x');
+  fs.symlinkSync(path.join(root, '.env'), path.join(root, 'innocent.txt'));
+  for (const p of ['/.env', '/_headers', '/_redirects', '/.git/config', '/sub/../.env', '/innocent.txt']) {
+    assert.equal((await get(p)).status, 404, p);
+  }
 });
 
 test('non GET/HEAD is 405; HEAD has no body', async () => {
@@ -97,8 +116,13 @@ test('mime types: wasm, js, gz are served without content-encoding', () => {
   assert.equal(mimeFor('x.unknown'), 'application/octet-stream');
 });
 
-test('parseRange ignores multi-range', () => {
+test('parseRange classifies ignore / unsatisfiable / ok', () => {
   assert.equal(parseRange('bytes=0-1,3-4', 10), null);
+  assert.equal(parseRange('bytes=5-2', 10), null);
+  assert.equal(parseRange('bytes=10-', 10), 'unsatisfiable');
+  assert.equal(parseRange('bytes=0-', 0), 'unsatisfiable');
+  assert.deepEqual(parseRange('bytes=-100', 10), { start: 0, end: 9 });
+  assert.deepEqual(parseRange('bytes=2-99', 10), { start: 2, end: 9 });
 });
 
 test('parseGlobalHeaders reads only the /* block', () => {

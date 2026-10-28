@@ -1,14 +1,30 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const http = require('node:http');
+const { pipeline } = require('node:stream');
 const { serveStatic } = require('./static-files');
+
+const COOKIE_NAME = 'bento_token';
+
+function hasToken(cookieHeader, token) {
+  const wanted = Buffer.from(`${COOKIE_NAME}=${token}`);
+  return String(cookieHeader || '')
+    .split(';')
+    .map((c) => Buffer.from(c.trim()))
+    .some((c) => c.length === wanted.length && crypto.timingSafeEqual(c, wanted));
+}
 
 /**
  * Loopback-only HTTP server on a random port. Rejects requests whose Host
- * is not our exact loopback origin (DNS rebinding) or whose Origin header
- * names a different origin (other local web pages).
+ * is not our exact loopback origin (DNS rebinding), whose Origin header names
+ * a different origin, or that lack the per-run secret cookie. The caller
+ * installs the cookie (`cookie` in the result) into the window's session
+ * before loading, so other local processes that can reach the port but do not
+ * know the token get 403.
  */
 function startHttpTransport({ rootReal, headers }) {
+  const token = crypto.randomBytes(24).toString('hex');
   return new Promise((resolve, reject) => {
     let origin = '';
     const server = http.createServer(async (req, res) => {
@@ -22,6 +38,7 @@ function startHttpTransport({ rootReal, headers }) {
         if (req.headers.origin && req.headers.origin !== origin) {
           return fail(403, 'Forbidden');
         }
+        if (!hasToken(req.headers.cookie, token)) return fail(403, 'Forbidden');
         const url = new URL(req.url, origin);
         const result = await serveStatic({
           rootReal,
@@ -33,12 +50,12 @@ function startHttpTransport({ rootReal, headers }) {
         res.writeHead(result.status, result.headers);
         if (result.body === null) return res.end();
         if (Buffer.isBuffer(result.body)) return res.end(result.body);
-        result.body.on('error', () => res.destroy());
-        result.body.pipe(res);
+        // pipeline destroys the file stream if the client aborts.
+        return pipeline(result.body, res, () => {});
       } catch (err) {
         process.stderr.write(`[transport-http] ${err && err.stack}\n`);
-        if (!res.headersSent) fail(500, 'Internal error');
-        else res.destroy();
+        if (!res.headersSent) return fail(500, 'Internal error');
+        return res.destroy();
       }
     });
     server.once('error', reject);
@@ -46,10 +63,15 @@ function startHttpTransport({ rootReal, headers }) {
       origin = `http://127.0.0.1:${server.address().port}`;
       resolve({
         origin,
-        close: () => new Promise((done) => server.close(() => done())),
+        cookie: { url: origin, name: COOKIE_NAME, value: token, httpOnly: true, sameSite: 'strict' },
+        close: () =>
+          new Promise((done) => {
+            server.close(() => done());
+            server.closeAllConnections();
+          }),
       });
     });
   });
 }
 
-module.exports = { startHttpTransport };
+module.exports = { startHttpTransport, COOKIE_NAME };

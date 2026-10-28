@@ -49,6 +49,11 @@ function decodePath(urlPath) {
   return decoded;
 }
 
+/** `_headers`/`_redirects` are host config, dotfiles are never app content. */
+function isHiddenSegment(segment) {
+  return segment.startsWith('.') || segment === '_headers' || segment === '_redirects';
+}
+
 function isInside(root, candidate) {
   return candidate === root || candidate.startsWith(root + path.sep);
 }
@@ -63,6 +68,7 @@ async function resolveFile(rootReal, urlPath) {
   const decoded = decodePath(urlPath);
   if (decoded === null) return null;
   const rel = decoded.replace(/^\/+/, '');
+  if (rel.split('/').some(isHiddenSegment)) return null;
   const candidates = decoded.endsWith('/')
     ? [path.join(rel, 'index.html')]
     : [rel, `${rel}.html`, path.join(rel, 'index.html')];
@@ -72,34 +78,33 @@ async function resolveFile(rootReal, urlPath) {
       .realpath(path.join(rootReal, candidate))
       .catch(() => null);
     if (real === null || !isInside(rootReal, real)) continue;
+    if (path.relative(rootReal, real).split(path.sep).some(isHiddenSegment)) continue;
     const stat = await fs.promises.stat(real).catch(() => null);
     if (stat && stat.isFile()) return { file: real, size: stat.size };
   }
   return null;
 }
 
-/** Parse a single `bytes=` range. Returns null (ignore), 'invalid', or {start,end}. */
+/**
+ * Parse a single `bytes=` range per RFC 9110 section 14. Returns null when the
+ * header must be ignored (absent, other unit, multiple ranges, syntactically
+ * invalid, including last < first) so the caller answers 200 with the whole
+ * file; 'unsatisfiable' when it is valid but outside the file (416); or
+ * {start, end}.
+ */
 function parseRange(header, size) {
   if (!header) return null;
   const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!match || (match[1] === '' && match[2] === '')) {
-    return header.startsWith('bytes=') && !header.includes(',')
-      ? 'invalid'
-      : null;
+  if (!match || (match[1] === '' && match[2] === '')) return null;
+  const [first, last] = [match[1], match[2]].map((v) => (v === '' ? null : Number(v)));
+  if ([first, last].some((v) => v !== null && !Number.isSafeInteger(v))) return null;
+  if (first === null) {
+    if (last === 0) return 'unsatisfiable';
+    return size === 0 ? 'unsatisfiable' : { start: Math.max(0, size - last), end: size - 1 };
   }
-  let start;
-  let end;
-  if (match[1] === '') {
-    const suffix = Number(match[2]);
-    if (suffix === 0) return 'invalid';
-    start = Math.max(0, size - suffix);
-    end = size - 1;
-  } else {
-    start = Number(match[1]);
-    end = match[2] === '' ? size - 1 : Math.min(Number(match[2]), size - 1);
-  }
-  if (start >= size || start > end) return 'invalid';
-  return { start, end };
+  if (last !== null && last < first) return null;
+  if (first >= size) return 'unsatisfiable';
+  return { start: first, end: last === null ? size - 1 : Math.min(last, size - 1) };
 }
 
 async function notFound(rootReal, method, baseHeaders) {
@@ -146,7 +151,7 @@ async function serveStatic({ rootReal, method, urlPath, range, baseHeaders }) {
     'Cache-Control': 'no-cache',
   };
   const parsed = parseRange(range, found.size);
-  if (parsed === 'invalid') {
+  if (parsed === 'unsatisfiable') {
     return {
       status: 416,
       headers: { ...headers, 'Content-Range': `bytes */${found.size}` },

@@ -6,6 +6,8 @@ const path = require('node:path');
 const { test } = require('node:test');
 const { CHANNELS } = require('../src/channels');
 const { safeFileName, parseOpenOptions, isTrustedSender } = require('../src/ipc');
+const { schemePrivileges } = require('../src/transport-scheme');
+const { isAllowedRequestUrl, lockSession } = require('../src/security');
 
 test('preload channel names mirror channels.js', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
@@ -38,4 +40,43 @@ test('isTrustedSender accepts only the top-level frame of the app origin', () =>
   assert.equal(isTrustedSender(frame('bento://app/x', {}), origin), false);
   assert.equal(isTrustedSender({ senderFrame: null }, origin), false);
   assert.equal(isTrustedSender(frame('not a url'), origin), false);
+});
+
+test('scheme privileges: service workers are off by design, only an explicit opt-in turns them on', () => {
+  assert.equal(schemePrivileges().allowServiceWorkers, false);
+  assert.equal(schemePrivileges({}).allowServiceWorkers, false);
+  assert.equal(schemePrivileges({ allowServiceWorkers: true }).allowServiceWorkers, true);
+});
+
+test('request allowlist: app origin, own blob:, inline image/font data: only', () => {
+  const origin = 'bento://app';
+  for (const url of ['bento://app/a.js', 'blob:bento://app/uuid', 'data:image/png;base64,AA', 'data:font/woff2;base64,AA']) {
+    assert.equal(isAllowedRequestUrl(url, origin), true, url);
+  }
+  for (const url of ['https://example.com/', 'data:text/html,x', 'data:application/javascript,1', 'devtools://devtools/x', 'blob:https://evil/x', 'file:///etc/passwd']) {
+    assert.equal(isAllowedRequestUrl(url, origin), false, url);
+  }
+  assert.equal(isAllowedRequestUrl('devtools://devtools/x', origin, { allowDevtools: true }), true);
+});
+
+test('lockSession denies every permission kind and reports each decision', () => {
+  const handlers = {};
+  const session = {
+    setPermissionRequestHandler: (f) => (handlers.request = f),
+    setPermissionCheckHandler: (f) => (handlers.check = f),
+    setDevicePermissionHandler: (f) => (handlers.device = f),
+    setDisplayMediaRequestHandler: (f) => (handlers.display = f),
+    webRequest: { onBeforeRequest: (f) => (handlers.before = f) },
+  };
+  const seen = [];
+  lockSession(session, 'bento://app', () => {}, { onPermission: (d) => seen.push(d) });
+  let answered;
+  handlers.request({}, 'geolocation', (v) => (answered = v));
+  assert.equal(answered, false);
+  assert.equal(handlers.check({}, 'notifications'), false);
+  assert.equal(handlers.device({ deviceType: 'usb' }), false);
+  assert.deepEqual(seen.map((d) => d.granted), [false, false, false]);
+  let result;
+  handlers.before({ url: 'https://example.com/' }, (r) => (result = r));
+  assert.deepEqual(result, { cancel: true });
 });

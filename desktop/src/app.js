@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
 const { buildAppHeaders } = require('./headers');
+const { installFailureHandlers } = require('./failure');
 const { registerIpc } = require('./ipc');
 const { lockSession, lockWebContents, secureWebPreferences } = require('./security');
 const { registerScheme, startSchemeTransport } = require('./transport-scheme');
@@ -37,12 +38,28 @@ async function startApp(options) {
       : await startHttpTransport({ rootReal, headers });
   const { origin } = transportHandle;
 
+  if (transportHandle.cookie) await session.defaultSession.cookies.set(transportHandle.cookie);
+
   const blocked = [];
-  lockSession(session.defaultSession, origin, (url) => {
-    blocked.push(url);
-    log(`blocked request: ${url}`);
-    onBlocked(url);
-  });
+  const permissionDecisions = [];
+  const extraAllowed = new Set();
+  lockSession(
+    session.defaultSession,
+    origin,
+    (url) => {
+      blocked.push(url);
+      log(`blocked request: ${url}`);
+      onBlocked(url);
+    },
+    {
+      allowDevtools: !app.isPackaged,
+      extraAllowed,
+      onPermission: (decision) => {
+        permissionDecisions.push(decision);
+        log(`permission ${decision.kind} ${decision.permission}: ${decision.granted ? 'GRANTED' : 'denied'}`);
+      },
+    }
+  );
   lockWebContents({ origin, log });
 
   let win = null;
@@ -54,6 +71,7 @@ async function startApp(options) {
     show: false,
     webPreferences: { ...secureWebPreferences(PRELOAD), backgroundThrottling: false },
   });
+  installFailureHandlers(win, log, (url) => extraAllowed.add(url));
   if (show) win.once('ready-to-show', () => win.show());
   await win.loadURL(options.url ? `${origin}${options.url}` : `${origin}/index.html`);
 
@@ -62,6 +80,7 @@ async function startApp(options) {
     rootReal,
     window: win,
     blocked,
+    permissionDecisions,
     close: async () => {
       disposeIpc();
       if (!win.isDestroyed()) win.destroy();
@@ -70,4 +89,4 @@ async function startApp(options) {
   };
 }
 
-module.exports = { prepare, startApp, TRANSPORTS, app };
+module.exports = { prepare, startApp, TRANSPORTS, app, log };
