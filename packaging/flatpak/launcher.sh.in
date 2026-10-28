@@ -1,4 +1,4 @@
 #!/bin/sh
 # zypak-wrapper supplies the Chromium sandbox inside Flatpak. The sandbox must stay on.
-unset ELECTRON_DISABLE_SANDBOX ELECTRON_RUN_AS_NODE NODE_OPTIONS
+unset ELECTRON_DISABLE_SANDBOX CHROME_DEVEL_SANDBOX ELECTRON_EXTRA_LAUNCH_ARGS ELECTRON_ENABLE_LOGGING ELECTRON_RUN_AS_NODE NODE_OPTIONS
 exec zypak-wrapper /app/lib/@EXECUTABLE@/@EXECUTABLE@ --ozone-platform-hint=auto "$@"

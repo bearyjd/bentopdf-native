@@ -1,7 +1,19 @@
 'use strict';
 
+// Must stay first: refuse to start when the environment asks for the sandbox to be
+// off. Chromium reads these before any JavaScript runs, so this is a fail-closed
+// tripwire (no window, no renderer is ever created); the launchers also unset them.
+const { app } = require('electron');
+const SANDBOX_OFF_ENV = ['ELECTRON_DISABLE_SANDBOX', 'CHROME_DEVEL_SANDBOX'];
+const sandboxOff = SANDBOX_OFF_ENV.filter((name) => process.env[name]);
+if (sandboxOff.length > 0) {
+  process.stderr.write(`[bento] refusing to start: ${sandboxOff.join(', ')} would weaken the sandbox. Unset it and start again.\n`);
+  app.exit(2);
+  process.exit(2);
+}
+
 const path = require('node:path');
-const { app, dialog, Menu, shell } = require('electron');
+const { dialog, Menu, shell } = require('electron');
 const { prepare, startApp, TRANSPORTS, log } = require('./app');
 const brand = require('../brand.json');
 const { aboutDetail, buildMenuTemplate, SOURCE_URL } = require('./menu');

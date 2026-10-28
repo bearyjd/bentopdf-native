@@ -38,7 +38,8 @@ test('pdfPathsFromArgv: unpackaged argv also skips the app path; non-arrays and 
 test('validateOpenPath: accepts a small pdf; rejects wrong extension, directory, oversize, FIFO, missing', async () => {
   const ok = path.join(tmp, 'ok.pdf');
   fs.writeFileSync(ok, '%PDF-1.4');
-  assert.deepEqual(await validateOpenPath(ok, 100), { size: 8, filePath: fs.realpathSync(ok) });
+  const { dev, ino } = fs.statSync(ok);
+  assert.deepEqual(await validateOpenPath(ok, 100), { size: 8, filePath: fs.realpathSync(ok), dev, ino });
   await assert.rejects(validateOpenPath(ok, 4), /too large/);
   const txt = path.join(tmp, 'a.txt');
   fs.writeFileSync(txt, 'x');
@@ -119,6 +120,40 @@ test('openPath: refuses non-pdf and non-regular files without issuing a grant', 
   await assert.rejects(h.dispose.openPath(h.sender, txt), /not a \.pdf/);
   await assert.rejects(h.dispose.openPath(h.sender, '/etc/passwd'), /not a \.pdf/);
   assert.deepEqual(await h.take(), []);
+});
+
+test('open-with grant: a file swapped or rewritten after the grant is refused at read time', async () => {
+  const h = harness();
+  const p = path.join(tmp, 'swap.pdf');
+  fs.writeFileSync(p, '%PDF-1.4 original');
+  const ok = await h.dispose.openPath(h.sender, p);
+  assert.match(Buffer.from(await h.read(ok.token)).toString(), /original/);
+  // different inode under the same name
+  const other = path.join(tmp, 'swap-other.pdf');
+  fs.writeFileSync(other, '%PDF-1.4 other');
+  fs.renameSync(other, p);
+  await assert.rejects(h.read(ok.token), /changed since it was granted/);
+  // same inode, content no longer a PDF
+  const again = await h.dispose.openPath(h.sender, p);
+  fs.writeFileSync(p, 'secret, not a pdf');
+  await assert.rejects(h.read(again.token), /missing %PDF- header/);
+});
+
+test('open-with grant: a symlink put in place of the resolved path is not followed', async () => {
+  const h = harness();
+  const p = path.join(tmp, 'nofollow.pdf');
+  fs.writeFileSync(p, '%PDF-1.4 x');
+  const g = await h.dispose.openPath(h.sender, p);
+  const secret = path.join(tmp, 'nofollow-secret.pdf');
+  fs.writeFileSync(secret, '%PDF-1.4 secret');
+  fs.unlinkSync(p);
+  fs.symlinkSync(secret, p);
+  await assert.rejects(h.read(g.token), /ELOOP/);
+});
+
+test('pdfPathsFromArgv: after a bare -- every argument is a file argument', () => {
+  assert.deepEqual(pdfPathsFromArgv(['exe', '--', '-weird.pdf', '--no-sandbox.pdf'], { cwd: '/d' }), ['/d/-weird.pdf', '/d/--no-sandbox.pdf']);
+  assert.deepEqual(pdfPathsFromArgv(['exe', '-weird.pdf', '/d/a.pdf'], { cwd: '/d' }), ['/d/a.pdf']);
 });
 
 test('takeOpened rejects untrusted senders', () => {

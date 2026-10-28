@@ -20,7 +20,7 @@ const children = [];
 
 function launch(env = {}) {
   const child = spawn(electronBinary, ['--ozone-platform=headless', `--user-data-dir=${profile}`, entry], {
-    env: { ...process.env, TMPDIR: shortTmp, ...env },
+    env: { ...process.env, TMPDIR: shortTmp, BENTO_TEST_HEADLESS: '1', ...env },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   const out = { stderr: '', exit: new Promise((resolve) => child.once('exit', (code) => resolve(code))) };
@@ -53,12 +53,46 @@ test('main.js: a bad BENTO_TRANSPORT is rejected with exit code 2', async () => 
   const other = fs.mkdtempSync(path.join(shortTmp, 'bento-main2-'));
   try {
     const child = spawn(electronBinary, ['--ozone-platform=headless', `--user-data-dir=${other}`, entry], {
-      env: { ...process.env, BENTO_TRANSPORT: 'carrier-pigeon' },
+      env: { ...process.env, BENTO_TEST_HEADLESS: '1', BENTO_TRANSPORT: 'carrier-pigeon' },
       stdio: 'ignore',
     });
     const code = await new Promise((resolve) => child.once('exit', resolve));
     assert.equal(code, 2);
   } finally {
     fs.rmSync(other, { recursive: true, force: true });
+  }
+});
+
+// Exit 2 before anything starts: a sandbox-off environment, or a switch off the allowlist.
+async function exitCodeOf(args, env) {
+  const other = fs.mkdtempSync(path.join(shortTmp, 'bento-main3-'));
+  try {
+    const child = spawn(electronBinary, ['--ozone-platform=headless', `--user-data-dir=${other}`, ...args, entry], {
+      env: { ...process.env, BENTO_TEST_HEADLESS: '1', TMPDIR: shortTmp, ...env },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (c) => (stderr += c));
+    children.push(child);
+    const code = await new Promise((resolve) => child.once('exit', resolve));
+    return { code, stderr };
+  } finally {
+    fs.rmSync(other, { recursive: true, force: true });
+  }
+}
+
+test('main.js: refuses to start when the environment switches the sandbox off', async () => {
+  for (const name of ['ELECTRON_DISABLE_SANDBOX', 'CHROME_DEVEL_SANDBOX']) {
+    const { code, stderr } = await exitCodeOf([], { [name]: '1' });
+    assert.equal(code, 2, name);
+    assert.match(stderr, new RegExp(`refusing to start: ${name}`));
+  }
+});
+
+test('main.js: refuses to start with a switch off the allowlist, in either dash spelling', async () => {
+  for (const arg of ['--disable-features=Foo', '-remote-debugging-port=0']) {
+    const { code, stderr } = await exitCodeOf([arg], {});
+    assert.equal(code, 2, arg);
+    assert.ok(stderr.includes(`unsafe switch(es): ${arg}`), stderr);
   }
 });

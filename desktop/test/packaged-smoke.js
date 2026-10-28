@@ -52,13 +52,13 @@ const launch = (files) => {
   const isImage = target.endsWith('.AppImage');
   const command = isFlatpak ? 'flatpak' : target;
   const args = isFlatpak
-    ? ['run', '--user', '--share=network', `--filesystem=${work}`, target.slice('flatpak:'.length), ...appArgs, ...files]
+    ? ['run', '--user', '--share=network', '--env=BENTO_TEST_HEADLESS=1', `--filesystem=${work}`, target.slice('flatpak:'.length), ...appArgs, ...files]
     : [...(isImage ? ['--appimage-extract-and-run'] : []), ...appArgs, ...files];
   const child = spawn(command, args, {
     detached: true,
     stdio: ['ignore', 'ignore', 'pipe'],
     // The packaged app must ignore all of these.
-    env: { ...process.env, TMPDIR: tmpBase, BENTO_DIST: '/nonexistent', BENTO_TRANSPORT: 'carrier-pigeon' },
+    env: { ...process.env, BENTO_TEST_HEADLESS: '1', TMPDIR: tmpBase, BENTO_DIST: '/nonexistent', BENTO_TRANSPORT: 'carrier-pigeon' },
   });
   const out = { stderr: '', child };
   child.stderr.on('data', (c) => (out.stderr += c));

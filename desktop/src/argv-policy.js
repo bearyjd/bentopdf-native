@@ -1,47 +1,45 @@
 'use strict';
 
-// Command-line switches this application refuses. Chromium has already parsed
-// the first instance's own switches before any JavaScript runs, so for the
-// first launch this is a fail-closed tripwire (exit 2); for a second instance
-// the whole invocation is dropped. The names are listed without their leading
-// dashes so that the release gate's grep for forbidden flags stays meaningful.
-const ALWAYS_REFUSED = [
-  'no-sandbox',
-  'disable-gpu-sandbox',
-  'disable-setuid-sandbox',
-  'disable-namespace-sandbox',
-  'disable-seccomp-filter-sandbox',
-  'disable-web-security',
-  'disable-site-isolation-trials',
-  'allow-running-insecure-content',
-  'ignore-certificate-errors',
-  'inspect',
-  'inspect-brk',
-  'inspect-port',
-  'inspect-publish-uid',
-  'js-flags',
-  'remote-debugging-address',
-  'remote-allow-origins',
-  'auto-open-devtools-for-tabs',
-  'load-extension',
-  'host-rules',
-  'host-resolver-rules',
-];
-// Debug port/pipe: only alongside the headless ozone backend, which cannot show
-// a window (this is how the packaged smoke test drives the real artifact).
-const HEADLESS_ONLY = ['remote-debugging-port', 'remote-debugging-pipe'];
+// Allowlist for command-line switches. Chromium has already parsed the first
+// instance's own switches before any JavaScript runs, so for the first launch
+// this is a fail-closed tripwire (exit 2); for a second instance the whole
+// invocation is dropped.
+//
+// Anything that starts with a dash is a switch, whatever its spelling: on POSIX
+// Chromium honours a single dash too (`-remote-debugging-port=0`; verified on
+// Electron 45, docs/desktop-linux.md). Only the exact, case-sensitive forms
+// below pass. A bare `--` ends the options: what follows is a file argument.
+// Switch names are built from parts so the release gate's grep for forbidden
+// flag literals stays meaningful.
+const DASHES = '--';
+const ALWAYS_ALLOWED = new Set([
+  `${DASHES}ozone-platform-hint=auto`,
+  `${DASHES}ozone-platform-hint=wayland`,
+  `${DASHES}ozone-platform-hint=x11`,
+]);
+// The test harness drives the real artifact headless over the debug port. These
+// pass only when BENTO_TEST_HEADLESS=1 is in the environment.
+const TEST_EXACT = new Set([`${DASHES}ozone-platform=headless`, `${DASHES}remote-debugging-pipe`]);
+const TEST_PREFIX = [`${DASHES}remote-debugging-port=`, `${DASHES}user-data-dir=`];
 
-const switchName = (arg) => arg.slice(2).split('=')[0].toLowerCase();
+const looksLikeSwitch = (arg) => typeof arg === 'string' && arg.startsWith('-');
 
-/** Returns the arguments of `argv` that this application refuses (empty array = fine). */
-function unsafeSwitches(argv) {
-  const switches = (Array.isArray(argv) ? argv : []).filter((a) => typeof a === 'string' && a.startsWith('--'));
-  const headless = switches.some((a) => a.toLowerCase() === '--ozone-platform=headless');
-  return switches.filter((arg) => {
-    const name = switchName(arg);
-    if (ALWAYS_REFUSED.includes(name) || name.startsWith('inspect')) return true;
-    return HEADLESS_ONLY.includes(name) && !headless;
-  });
+function allowed(arg, testMode) {
+  if (ALWAYS_ALLOWED.has(arg)) return true;
+  if (!testMode) return false;
+  return TEST_EXACT.has(arg) || TEST_PREFIX.some((p) => arg.startsWith(p) && arg.length > p.length);
+}
+
+/**
+ * Returns the arguments of `argv` (after the executable) that this application
+ * refuses, i.e. every switch not on the allowlist (empty array = fine).
+ */
+function unsafeSwitches(argv, env = process.env) {
+  const list = Array.isArray(argv) ? argv.slice(1) : [];
+  const end = list.indexOf('--');
+  const options = end === -1 ? list : list.slice(0, end);
+  const testMode = env.BENTO_TEST_HEADLESS === '1';
+  return options.filter((arg) => looksLikeSwitch(arg) && !allowed(arg, testMode));
 }
 
 module.exports = { unsafeSwitches };
