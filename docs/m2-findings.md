@@ -119,9 +119,14 @@ Result: the shell serves the bundle's own `script-src 'self' 'wasm-unsafe-eval' 
   Needed by Ghostscript tools that use `ghostscript-loader` (PDF/A, Font to
   Outline, workflow). CSP cannot scope it to one tool, so every page can run
   blob: scripts; a per-page CSP (or an upstream change to load gs.js by URL)
-  would confine it. `script-src-elem`/`-attr` and `worker-src` allow no more
-  than `'self'`, `'wasm-unsafe-eval'` (and `blob:` for workers, which tools
-  spawn from blob URLs).
+  would confine it. Correction: the bundle's CSP defines no `script-src-elem`
+  or `-attr`, so script elements fall back to `script-src` and
+  `<script src=blob:>` IS allowed on every page. The validator refuses `blob:`
+  in explicit `script-src-elem`/`-attr` and allows no more than `'self'`,
+  `'wasm-unsafe-eval'` in `worker-src` (plus `blob:` there, which tools use to
+  spawn workers). Narrower fix (follow-up): load `gs.js` from its same-origin
+  URL (`/wasm/gs/gs.js`) instead of via a blob URL; needs an upstream source
+  change.
 - Fail-closed validation is a token allowlist (`script-src`, `script-src-elem`,
   `script-src-attr`, `worker-src`, `default-src` when `script-src` is absent):
   `'self'`, `'wasm-unsafe-eval'`, `'none'` plus the reasoned exceptions. Hashes,

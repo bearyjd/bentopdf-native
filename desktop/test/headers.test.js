@@ -38,6 +38,15 @@ test('fails closed on unsafe-eval / unsafe-inline in script-src unless allowlist
   assert.doesNotThrow(() => buildAppHeaders(dist(["Content-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'self'"])));
 });
 
+test('reasoned unsafe exceptions need a non-empty reason; code sources reject https: directly', () => {
+  const evalCsp = "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-eval'";
+  assert.throws(() => buildAppHeaders(dist([evalCsp]), { allowedUnsafe: { "'unsafe-eval'": '' } }), /unsafe-eval/);
+  // Direct call: the allowlist itself must refuse https: even if the external-origin guard were removed.
+  const { assertCodeSourcesFailClosed } = require('../src/headers');
+  assert.throws(() => assertCodeSourcesFailClosed("script-src 'self'; script-src-elem 'self' https:", {}), /script-src-elem/);
+  assert.throws(() => assertCodeSourcesFailClosed("script-src 'self'; worker-src 'self' https://cdn.example", {}), /worker-src/);
+});
+
 const REJECTED = {
   'unsafe-inline': "'unsafe-inline'",
   'unsafe-hashes': "'unsafe-hashes'",

@@ -12,12 +12,15 @@ const { test, after } = require('node:test');
 
 const electronBinary = require('electron');
 const entry = path.join(__dirname, '..', 'src', 'main.js');
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'bento-main-'));
+// Chromium's single-instance lock is a Unix socket created under the child's TMPDIR; sun_path is ~100 bytes,
+// so a deeply nested TMPDIR makes the lock fail with "Socket path too long". Give the child a short TMPDIR.
+const shortTmp = os.tmpdir().length > 40 ? '/tmp' : os.tmpdir();
+const profile = fs.mkdtempSync(path.join(shortTmp, 'bento-main-'));
 const children = [];
 
 function launch(env = {}) {
   const child = spawn(electronBinary, ['--ozone-platform=headless', `--user-data-dir=${profile}`, entry], {
-    env: { ...process.env, ...env },
+    env: { ...process.env, TMPDIR: shortTmp, ...env },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   const out = { stderr: '', exit: new Promise((resolve) => child.once('exit', (code) => resolve(code))) };
@@ -47,7 +50,7 @@ test('main.js: first instance runs, second instance on the same profile exits', 
 });
 
 test('main.js: a bad BENTO_TRANSPORT is rejected with exit code 2', async () => {
-  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'bento-main2-'));
+  const other = fs.mkdtempSync(path.join(shortTmp, 'bento-main2-'));
   try {
     const child = spawn(electronBinary, ['--ozone-platform=headless', `--user-data-dir=${other}`, entry], {
       env: { ...process.env, BENTO_TRANSPORT: 'carrier-pigeon' },

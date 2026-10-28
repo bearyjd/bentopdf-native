@@ -16,7 +16,9 @@ const ALLOWED_UNSAFE_SCRIPT_SOURCES = Object.freeze({
     'Ghostscript (compress, PDF/A, font-to-outline, greyscale ...): ghostscript-loader fetches gs.js and runs ' +
     'import(URL.createObjectURL(new Blob([gs.js]))), a blob: module script governed by script-src. Removing blob: ' +
     'made the loader fail with "Failed to fetch dynamically imported module" (test/csp-smoke probe `ghostscript`). ' +
-    'CSP cannot scope blob: to one tool, so it is allowed for script-src; script-src-elem/attr stay blob-free.',
+    'CSP cannot scope blob: to one tool, so it is allowed for script-src. NOTE: the bundle sets no script-src-elem/-attr, so ' +
+    'script elements fall back to script-src and <script src=blob:> IS allowed on every page. This validator only refuses blob: ' +
+    'if a bundle ever sets explicit script-src-elem/-attr.',
 });
 
 /**
@@ -113,4 +115,4 @@ function buildAppHeaders(distDir, { allowedUnsafe = ALLOWED_UNSAFE_SCRIPT_SOURCE
   return Object.freeze({ ...kept, 'Content-Security-Policy': bundleCsp, ...ISOLATION_HEADERS });
 }
 
-module.exports = { buildAppHeaders, parseGlobalHeaders, scriptSources, ISOLATION_HEADERS };
+module.exports = { buildAppHeaders, parseGlobalHeaders, scriptSources, assertCodeSourcesFailClosed, ISOLATION_HEADERS };
