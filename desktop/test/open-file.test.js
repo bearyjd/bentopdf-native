@@ -22,6 +22,11 @@ test('pdfPathsFromArgv: keeps only .pdf names, skips flags and the executable, r
   assert.deepEqual(pdfPathsFromArgv(argv, { cwd: '/work' }), ['/work/a.PDF', '/abs/b.pdf']);
 });
 
+test('pdfPathsFromArgv: file:// URLs (the %U field code) are decoded; remote hosts and non-pdf URLs are dropped', () => {
+  const argv = ['exe', 'file:///home/u/My%20Doc.pdf', 'file://evil.example/share/x.pdf', 'file:///etc/passwd', 'https://x.example/a.pdf', 'file:///bad%00.pdf'];
+  assert.deepEqual(pdfPathsFromArgv(argv), ['/home/u/My Doc.pdf']);
+});
+
 test('pdfPathsFromArgv: unpackaged argv also skips the app path; non-arrays and huge lists are bounded', () => {
   assert.deepEqual(pdfPathsFromArgv(['electron', '/app/main.pdf', 'x.pdf'], { cwd: '/w', defaultApp: true }), ['/w/x.pdf']);
   assert.deepEqual(pdfPathsFromArgv(undefined), []);

@@ -1,6 +1,6 @@
 {
   "name": "bentopdf-desktop",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Minimal secure Electron shell serving the offline BentoPDF bundle",
   "license": "AGPL-3.0-only",
@@ -9,12 +9,23 @@
     "start": "electron .",
     "test": "node --test --test-concurrency=1 --test-timeout=1800000 \"test/*.test.js\"",
     "lint": "eslint .",
-    "test:csp-smoke": "node --test --test-timeout=900000 test/csp-smoke.test.js"
+    "test:csp-smoke": "node --test --test-timeout=900000 test/csp-smoke.test.js",
+    "dist:linux": "bash ../scripts/package-linux.sh",
+    "test:fuses": "node tools/check-fuses.js",
+    "test:packaged": "node test/packaged-smoke.js"
   },
   "devDependencies": {
+    "@electron/fuses": "2.1.3",
     "@eslint/js": "10.0.1",
     "electron": "45.1.0",
+    "electron-builder": "26.18.0",
     "eslint": "10.1.0",
     "globals": "17.4.0"
+  },
+  "desktopName": "io.github.bearyjd.BentoPDFNative.desktop",
+  "homepage": "https://github.com/bearyjd/bentopdf-native",
+  "author": {
+    "name": "bearyjd",
+    "email": "jd@beary.us"
   }
 }

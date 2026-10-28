@@ -2,9 +2,18 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { fileURLToPath } = require('node:url');
 
 const MAX_OPEN_ARGS = 16;
 const MAX_PATH_LENGTH = 4096;
+
+function localPathOfFileUrl(url) {
+  try {
+    return fileURLToPath(url); // throws for a non-local host
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Candidate document paths from a command line (first launch or the argv of a
@@ -18,8 +27,10 @@ function pdfPathsFromArgv(argv, { cwd = process.cwd(), defaultApp = false } = {}
   for (const arg of rest) {
     if (typeof arg !== 'string' || arg.length === 0 || arg.length > MAX_PATH_LENGTH) continue;
     if (arg.startsWith('-') || arg.includes('\0')) continue;
-    if (path.extname(arg).toLowerCase() !== '.pdf') continue;
-    found.push(path.resolve(cwd, arg));
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(arg) && !arg.startsWith('file://')) continue; // other URL schemes
+    const local = arg.startsWith('file://') ? localPathOfFileUrl(arg) : arg; // %U launchers pass file:// URLs
+    if (local === null || local.includes('\0') || path.extname(local).toLowerCase() !== '.pdf') continue;
+    found.push(path.resolve(cwd, local));
     if (found.length >= MAX_OPEN_ARGS) break;
   }
   return found;
