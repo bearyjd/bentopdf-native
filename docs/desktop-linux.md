@@ -162,7 +162,10 @@ what follows is a file argument and still goes through the open-with validation.
 `BENTO_TEST_HEADLESS=1` is in the environment (the test harness sets it) are
 `--ozone-platform=headless`, `--remote-debugging-port=<n>`, `--remote-debugging-pipe` and
 `--user-data-dir=<dir>` also accepted; that is how the packaged smoke test drives the real artifact.
-Chromium reads its own switches before any script runs, so for the first launch this is a
+Electron itself adds `--allow-file-access-from-files` to the argv it reports for a second instance
+(found by the packaged smoke test; measured on Electron 45.1.0; the first launch's `process.argv` does
+not have it), so that one switch is accepted in second-instance argv only; it cannot affect the running
+process. Chromium reads its own switches before any script runs, so for the first launch this is a
 fail-closed tripwire, not a filter.
 
 Environment: `src/main.js` begins by exiting with code 2 if `ELECTRON_DISABLE_SANDBOX` or

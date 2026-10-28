@@ -79,7 +79,7 @@ if (refused.length > 0) {
   };
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
-    const unsafe = unsafeSwitches(argv);
+    const unsafe = unsafeSwitches(argv, undefined, { secondInstance: true });
     if (unsafe.length > 0) {
       log(`ignored a second launch with unsafe switch(es): ${unsafe.join(' ')}`);
       return;

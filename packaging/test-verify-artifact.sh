@@ -168,7 +168,7 @@ m_about_no_agpl() { asar_edit "$1" src/menu.js 's/AGPL-3\.0-only/GPL/g'; }
 m_env_override() { asar_edit "$1" src/main.js 's/app\.isPackaged \? \{\} : process\.env/process.env/'; }
 m_env_elsewhere() { asar_edit "$1" src/app.js '1a const leak = process.env.HOME;'; }
 m_argv_policy_gone() { asar_edit "$1" src/main.js 's/unsafeSwitches\(process\.argv\)/[]/'; }
-m_argv_second_gone() { asar_edit "$1" src/main.js 's/unsafeSwitches\(argv\)/[]/'; }
+m_argv_second_gone() { asar_edit "$1" src/main.js 's/unsafeSwitches\(argv, undefined, \{ secondInstance: true \}\)/[]/'; }
 m_no_magic() { asar_edit "$1" src/open-file.js 's/%PDF-/%XXX-/g'; }
 m_asar_no_sandbox_flag() { asar_edit "$1" src/main.js '1a const x = "--no-sandbox";'; }
 m_rm_asar() { rm "$(resdir "$1")/app.asar"; }

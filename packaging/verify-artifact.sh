@@ -157,7 +157,7 @@ grep -q "'ELECTRON_DISABLE_SANDBOX'" "$WORK/asar/src/main.js" && grep -q "'CHROM
 grep -q 'app.exit(2)' "$WORK/asar/src/main.js" || fail "main.js has no exit-2 refusal"
 grep -q "require('./argv-policy')" "$WORK/asar/src/main.js" || fail "main.js does not load the argv policy"
 grep -q 'unsafeSwitches(process.argv)' "$WORK/asar/src/main.js" || fail "main.js does not check its own argv"
-grep -q "unsafeSwitches(argv)" "$WORK/asar/src/main.js" || fail "main.js does not check second-instance argv"
+grep -q "unsafeSwitches(argv, undefined, { secondInstance: true })" "$WORK/asar/src/main.js" || fail "main.js does not check second-instance argv"
 grep -q '%PDF-' "$WORK/asar/src/open-file.js" || fail "open-file.js does not check the %PDF- header"
 grep -q 'realpath' "$WORK/asar/src/open-file.js" || fail "open-file.js does not resolve symlinks"
 pass "argv policy (own and second-instance argv) and open-with header/symlink checks are present"

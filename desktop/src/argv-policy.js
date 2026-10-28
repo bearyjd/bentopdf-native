@@ -22,10 +22,16 @@ const ALWAYS_ALLOWED = new Set([
 const TEST_EXACT = new Set([`${DASHES}ozone-platform=headless`, `${DASHES}remote-debugging-pipe`]);
 const TEST_PREFIX = [`${DASHES}remote-debugging-port=`, `${DASHES}user-data-dir=`];
 
+// Electron itself adds this switch to the argv it reports for a *second* instance (measured on
+// Electron 45.1.0; the first launch's process.argv does not have it). It has no effect there: the
+// first process never re-parses the second one's switches. Accepted for second-instance argv only.
+const SECOND_INSTANCE_INJECTED = new Set([`${DASHES}allow-file-access-from-files`]);
+
 const looksLikeSwitch = (arg) => typeof arg === 'string' && arg.startsWith('-');
 
-function allowed(arg, testMode) {
+function allowed(arg, testMode, secondInstance) {
   if (ALWAYS_ALLOWED.has(arg)) return true;
+  if (secondInstance && SECOND_INSTANCE_INJECTED.has(arg)) return true;
   if (!testMode) return false;
   return TEST_EXACT.has(arg) || TEST_PREFIX.some((p) => arg.startsWith(p) && arg.length > p.length);
 }
@@ -34,12 +40,12 @@ function allowed(arg, testMode) {
  * Returns the arguments of `argv` (after the executable) that this application
  * refuses, i.e. every switch not on the allowlist (empty array = fine).
  */
-function unsafeSwitches(argv, env = process.env) {
+function unsafeSwitches(argv, env = process.env, { secondInstance = false } = {}) {
   const list = Array.isArray(argv) ? argv.slice(1) : [];
   const end = list.indexOf('--');
   const options = end === -1 ? list : list.slice(0, end);
   const testMode = env.BENTO_TEST_HEADLESS === '1';
-  return options.filter((arg) => looksLikeSwitch(arg) && !allowed(arg, testMode));
+  return options.filter((arg) => looksLikeSwitch(arg) && !allowed(arg, testMode, secondInstance));
 }
 
 module.exports = { unsafeSwitches };

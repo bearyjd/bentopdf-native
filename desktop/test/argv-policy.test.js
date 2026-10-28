@@ -39,6 +39,13 @@ test('unsafeSwitches: the platform hint, file arguments and junk pass; the execu
   assert.deepEqual(unsafeSwitches(['exe', 42, null], NO_ENV), []);
 });
 
+test('unsafeSwitches: the switch Electron injects into second-instance argv passes there only', () => {
+  const injected = ['exe', '--ozone-platform-hint=auto', '--allow-file-access-from-files', '/d/a.pdf'];
+  assert.deepEqual(unsafeSwitches(injected, NO_ENV, { secondInstance: true }), []);
+  assert.deepEqual(unsafeSwitches(injected, NO_ENV), ['--allow-file-access-from-files']);
+  assert.deepEqual(unsafeSwitches(['exe', '--allow-file-access-from-files', '--no-sandbox'], NO_ENV, { secondInstance: true }), ['--no-sandbox']);
+});
+
 test('unsafeSwitches: a bare -- ends the options; refused switches before it still count', () => {
   assert.deepEqual(unsafeSwitches(['exe', '--', '--no-sandbox', '-x.pdf'], NO_ENV), []);
   assert.deepEqual(unsafeSwitches(['exe', '--no-sandbox', '--', 'a.pdf'], NO_ENV), ['--no-sandbox']);
