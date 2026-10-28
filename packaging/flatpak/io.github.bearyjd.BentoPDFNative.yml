@@ -12,6 +12,7 @@ command: bentopdf-native
 separate-locales: false
 finish-args:
   - --share=ipc
+  - --nosocket=x11
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri

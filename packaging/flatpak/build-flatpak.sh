@@ -33,8 +33,10 @@ else
   install -m644 "$ID.metainfo.xml" "$APP/share/metainfo/$ID.metainfo.xml"
   install -m644 ../icons/512x512.png "$APP/share/icons/hicolor/512x512/apps/$ID.png"
   # Keep in sync with finish-args in the manifest. No network, no filesystem access.
+  # --nosocket=x11 removes the plain x11 socket that the BaseApp grants; fallback-x11 still
+  # gives X11 only when no Wayland socket exists.
   flatpak build-finish .build/app --command=bentopdf-native \
-    --share=ipc --socket=wayland --socket=fallback-x11 --device=dri
+    --share=ipc --nosocket=x11 --socket=wayland --socket=fallback-x11 --device=dri
   flatpak build-export .build/repo .build/app
 fi
 flatpak build-bundle .build/repo ".build/bentopdf-native-$VERSION.flatpak" "$ID"
