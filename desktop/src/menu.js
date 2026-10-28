@@ -1,7 +1,8 @@
 'use strict';
 
-const SOURCE_URL = 'https://github.com/bearyjd/bentopdf-native';
-const UPSTREAM_URL = 'https://github.com/alam00000/bentopdf';
+const brand = require('../brand.json');
+const SOURCE_URL = brand.sourceUrl;
+const UPSTREAM_URL = brand.upstreamUrl;
 
 /** Text of Help > About: the AGPL notice and where the corresponding source is. */
 function aboutDetail() {
@@ -30,7 +31,7 @@ function buildMenuTemplate({ showAbout, openSource, devtools = false }) {
     {
       label: 'Help',
       submenu: [
-        { label: 'About BentoPDF Native', click: showAbout },
+        { label: `About ${brand.productName}`, click: showAbout },
         { label: 'Source code (AGPL-3.0)', click: openSource },
       ],
     },

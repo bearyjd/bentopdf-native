@@ -20,6 +20,6 @@ fi
 
 bash packaging/gen-source-txt.sh
 cd desktop
-npx --no-install electron-builder --linux "${TARGETS[@]}" --x64 --config electron-builder.yml
+npx --no-install electron-builder --linux "${TARGETS[@]}" --x64 --config electron-builder.config.js
 bash ../packaging/harden-appimage.sh release/*.AppImage
 ls -l release/*.AppImage release/*.deb release/*.rpm 2>/dev/null || true

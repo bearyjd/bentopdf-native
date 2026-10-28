@@ -11,33 +11,45 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ID=io.github.bearyjd.BentoPDFNative
-VERSION="$(node -p "require('$HERE/../../desktop/package.json').version")"
-SRC="$HERE/../../desktop/release/linux-unpacked"
-[ -x "$SRC/bentopdf-native" ] || { echo "run scripts/package-linux.sh first" >&2; exit 1; }
+DESKTOP="$HERE/../../desktop"
+# Names and ids come from desktop/brand.json (docs/desktop-linux.md, "Renaming").
+ID="$(node -p "require('$DESKTOP/brand.json').appId")"
+EXE="$(node -p "require('$DESKTOP/brand.json').executableName")"
+VERSION="$(node -p "require('$DESKTOP/package.json').version")"
+SRC="$DESKTOP/release/linux-unpacked"
+[ -x "$SRC/$EXE" ] || { echo "run scripts/package-linux.sh first" >&2; exit 1; }
 
 cd "$HERE"
+# Render the templates (ids, names, version) into .build/render.
+R=.build/render
+rm -rf "$R"
+mkdir -p "$R"
+render() { node "$DESKTOP/tools/render-template.js" "$1" "$2" "${3:-644}"; }
+render app.desktop.in "$R/$ID.desktop"
+render app.metainfo.xml.in "$R/$ID.metainfo.xml"
+render app.yml.in "$R/$ID.yml"
+render launcher.sh.in "$R/$EXE.sh" 755
 if [ "${FLATPAK_USE_BUILDER:-0}" = 1 ]; then
-  flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=.build/repo --state-dir=.build/state .build/app "$ID.yml"
+  flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=.build/repo --state-dir=.build/state .build/app "$R/$ID.yml"
 else
   rm -rf .build/app .build/repo
   mkdir -p .build
   flatpak build-init .build/app "$ID" org.freedesktop.Sdk org.freedesktop.Platform 25.08 \
     --base=org.electronjs.Electron2.BaseApp --base-version=25.08
   APP=.build/app/files
-  mkdir -p "$APP/lib/bentopdf-native" "$APP/bin" "$APP/share/applications" "$APP/share/metainfo" "$APP/share/icons/hicolor/512x512/apps"
-  cp -a "$SRC/." "$APP/lib/bentopdf-native/"
-  rm -f "$APP/lib/bentopdf-native/chrome-sandbox" # zypak provides the sandbox in Flatpak
-  install -m755 bentopdf-native.sh "$APP/bin/bentopdf-native"
-  install -m644 "$ID.desktop" "$APP/share/applications/$ID.desktop"
-  install -m644 "$ID.metainfo.xml" "$APP/share/metainfo/$ID.metainfo.xml"
+  mkdir -p "$APP/lib/$EXE" "$APP/bin" "$APP/share/applications" "$APP/share/metainfo" "$APP/share/icons/hicolor/512x512/apps"
+  cp -a "$SRC/." "$APP/lib/$EXE/"
+  rm -f "$APP/lib/$EXE/chrome-sandbox" # zypak provides the sandbox in Flatpak
+  install -m755 "$R/$EXE.sh" "$APP/bin/$EXE"
+  install -m644 "$R/$ID.desktop" "$APP/share/applications/$ID.desktop"
+  install -m644 "$R/$ID.metainfo.xml" "$APP/share/metainfo/$ID.metainfo.xml"
   install -m644 ../icons/512x512.png "$APP/share/icons/hicolor/512x512/apps/$ID.png"
   # Keep in sync with finish-args in the manifest. No network, no filesystem access.
   # --nosocket=x11 removes the plain x11 socket that the BaseApp grants; fallback-x11 still
   # gives X11 only when no Wayland socket exists.
-  flatpak build-finish .build/app --command=bentopdf-native \
+  flatpak build-finish .build/app --command="$EXE" \
     --share=ipc --nosocket=x11 --socket=wayland --socket=fallback-x11 --device=dri
   flatpak build-export .build/repo .build/app
 fi
-flatpak build-bundle .build/repo ".build/bentopdf-native-$VERSION.flatpak" "$ID"
+flatpak build-bundle .build/repo ".build/$EXE-$VERSION.flatpak" "$ID"
 ls -l .build/*.flatpak

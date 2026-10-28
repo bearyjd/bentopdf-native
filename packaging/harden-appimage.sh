@@ -21,7 +21,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 OFFSET="$("$IMG" --appimage-offset)"
 (cd "$WORK" && "$IMG" --appimage-extract >/dev/null)
-install -m 755 "$HERE/linux/AppRun" "$WORK/squashfs-root/AppRun"
+node "$HERE/../desktop/tools/render-template.js" "$HERE/linux/AppRun" "$WORK/squashfs-root/AppRun" 755
 # electron-builder hardcodes %U for AppImage; one local file (%f) matches the other formats. file:// URLs are handled anyway.
 sed -i -E 's/^(Exec=.*) %f %U$/\1 %f/; s/^(Exec=.*) %U$/\1 %f/' "$WORK"/squashfs-root/*.desktop
 

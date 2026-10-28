@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Neutral, self-made application icon: a document glyph. No upstream or third-party artwork. CC0-1.0. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#2f4f7f"/>
+  <path d="M152 72h140l92 92v236a40 40 0 0 1-40 40H152a40 40 0 0 1-40-40V112a40 40 0 0 1 40-40z" fill="#ffffff"/>
+  <path d="M292 72v70a22 22 0 0 0 22 22h70z" fill="#b9c7dd"/>
+  <rect x="160" y="226" width="192" height="22" rx="11" fill="#2f4f7f"/>
+  <rect x="160" y="276" width="192" height="22" rx="11" fill="#2f4f7f"/>
+  <rect x="160" y="326" width="120" height="22" rx="11" fill="#2f4f7f"/>
+</svg>

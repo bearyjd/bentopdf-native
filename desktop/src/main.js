@@ -3,6 +3,7 @@
 const path = require('node:path');
 const { app, dialog, Menu, shell } = require('electron');
 const { prepare, startApp, TRANSPORTS, log } = require('./app');
+const brand = require('../brand.json');
 const { aboutDetail, buildMenuTemplate, SOURCE_URL } = require('./menu');
 const { unsafeSwitches } = require('./argv-policy');
 const { pdfPathsFromArgv } = require('./open-file');
@@ -29,8 +30,8 @@ function installMenu() {
   const showAbout = () =>
     dialog.showMessageBox({
       type: 'info',
-      title: 'About BentoPDF Native',
-      message: `BentoPDF Native ${app.getVersion()}`,
+      title: `About ${brand.productName}`,
+      message: `${brand.productName} ${app.getVersion()}`,
       detail: aboutDetail(),
       buttons: ['OK', 'Open source code'],
       defaultId: 0,

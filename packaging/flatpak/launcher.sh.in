@@ -1,4 +1,4 @@
 #!/bin/sh
 # zypak-wrapper supplies the Chromium sandbox inside Flatpak. Do not add --no-sandbox.
 unset ELECTRON_DISABLE_SANDBOX ELECTRON_RUN_AS_NODE NODE_OPTIONS
-exec zypak-wrapper /app/lib/bentopdf-native/bentopdf-native --ozone-platform-hint=auto "$@"
+exec zypak-wrapper /app/lib/@EXECUTABLE@/@EXECUTABLE@ --ozone-platform-hint=auto "$@"

@@ -1,5 +1,5 @@
 #!/bin/sh
-# AppRun for the BentoPDF Native AppImage. Replaces electron-builder's, which
+# AppRun for the AppImage (@PRODUCT_NAME@). Replaces electron-builder's, which
 # silently turns the Chromium sandbox off when user namespaces are unavailable. Here the
 # app either runs with Chromium's sandbox or does not run, and says why.
 set -eu
@@ -11,11 +11,11 @@ export PATH="$HERE:$HERE/usr/sbin${PATH:+:$PATH}"
 export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 refuse() {
-  msg="BentoPDF Native cannot start: Chromium's sandbox needs unprivileged user namespaces and this system does not allow them.
+  msg="@PRODUCT_NAME@ cannot start: Chromium's sandbox needs unprivileged user namespaces and this system does not allow them.
 
 Typical causes: Ubuntu 23.10+/24.04 (AppArmor kernel.apparmor_restrict_unprivileged_userns=1), or kernel.unprivileged_userns_clone=0 / user.max_user_namespaces=0.
 
-BentoPDF Native will not run without its sandbox.
+@PRODUCT_NAME@ will not run without its sandbox.
 
 What to do:
   - Immutable hosts (Bazzite, Silverblue, Kinoite): use the Flatpak build. Do not layer the .deb/.rpm just for this.
@@ -33,4 +33,4 @@ if command -v unshare >/dev/null 2>&1 && ! unshare -Ur true 2>/dev/null; then
   refuse
 fi
 
-exec "$HERE/bentopdf-native" "$@"
+exec "$HERE/@EXECUTABLE@" "$@"
