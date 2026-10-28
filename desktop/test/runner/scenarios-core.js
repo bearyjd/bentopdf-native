@@ -160,8 +160,9 @@ async function denied(ctx) {
     out.geoQuery = (await navigator.permissions.query({ name: 'geolocation' })).state;
     out.notificationQuery = (await navigator.permissions.query({ name: 'notifications' })).state;
     out.notificationRequest = await Notification.requestPermission();
-    // Geolocation is already denied by the bundle's Permissions-Policy before the main process is asked,
-    // so it cannot prove the handler; clipboard-read and notifications reach it.
+    // Geolocation is already denied by the bundle's Permissions-Policy before the main process is asked.
+    // clipboard-read only reaches the handler when the document is focused (not so in every headless
+    // run), so it is recorded and must never be granted, but is not required to have been seen.
     out.clipboard = await navigator.clipboard.readText().then(() => 'READ', (e) => e.name);
     out.geoCode = await new Promise((res) => navigator.geolocation.getCurrentPosition(() => res('granted'), (e) => res(e.code === e.PERMISSION_DENIED ? 'PERMISSION_DENIED' : 'code ' + e.code)));
     out.fetchExternal = await fetch('https://example.com/', { mode: 'no-cors' }).then(() => 'ok', () => 'failed');
@@ -178,10 +179,9 @@ async function denied(ctx) {
   if (r.geoQuery !== 'denied' || r.notificationQuery !== 'denied') bad.push('permissions.query not denied');
   if (r.notificationRequest !== 'denied') bad.push('Notification.requestPermission not denied');
   if (r.geoCode !== 'PERMISSION_DENIED') bad.push('geolocation was not denied by permission');
-  // The main-process handler must have been consulted, and said no every time.
-  for (const permission of ['notifications', 'clipboard-read']) {
-    if (!r.decisions.some((d) => d.kind === 'request' && d.permission === permission)) bad.push(`main-process request handler never saw ${permission}`);
-  }
+  // Notification.requestPermission() reaches the main-process request handler deterministically
+  // (focus-independent); it must have been consulted, and every observed decision must be a refusal.
+  if (!r.decisions.some((d) => d.kind === 'request' && d.permission === 'notifications')) bad.push('main-process request handler never saw notifications');
   if (r.clipboard === 'READ') bad.push('clipboard read allowed');
   if (r.decisions.length === 0 || r.decisions.some((d) => d.granted !== false)) bad.push('a permission decision was not false');
   if (r.fetchExternal !== 'failed') bad.push('external fetch');
