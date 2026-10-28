@@ -1,0 +1,26 @@
+bentopdf-native
+Copyright (C) 2026 bearyjd and contributors
+Licensed under the GNU Affero General Public License v3.0 (see LICENSE).
+
+This project is an unofficial, community-built packaging of BentoPDF
+(https://github.com/alam00000/bentopdf, AGPL-3.0-only, (C) its authors).
+It is not affiliated with or endorsed by the BentoPDF project. Upstream
+source is fetched at build time and is not copied into this repository;
+all upstream copyright and license notices are preserved in that source.
+
+Third-party components that may appear in built artifacts (each retains its
+own license; verify versions in the upstream lockfile at build time):
+  - BentoPDF ................ AGPL-3.0
+  - PyMuPDF ................. AGPL-3.0
+  - Ghostscript ............. AGPL-3.0
+  - CoherentPDF (CPDF) ...... AGPL-3.0 (non-commercial/commercial dual)
+  - Tesseract.js / tessdata . Apache-2.0
+  - LibreOffice (WASM) ...... MPL-2.0 / LGPL (to be confirmed per release)
+  - Electron ................ MIT
+  - Capacitor ............... MIT
+
+Explicitly excluded: vendor/hyper-compress-wasm (separately licensed by the
+BentoPDF authors; not redistributed here).
+
+Corresponding source for any distributed artifact is this repository at the
+matching tag plus the pinned upstream BentoPDF tag recorded in UPSTREAM_VERSION.

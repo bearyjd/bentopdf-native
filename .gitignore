@@ -1,0 +1,20 @@
+graft/
+node_modules/
+upstream/
+dist/
+build/
+out/
+.omc/
+# Never commit signing material
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.p8
+*.mobileprovision
+*.cer
+keystore.properties
+.env
+.env.*
+!.env.example
