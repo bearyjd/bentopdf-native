@@ -32,8 +32,10 @@ jobs:
           git ls-files -z > "$RUNNER_TEMP/files.nul"
           if grep -zqP '\n' "$RUNNER_TEMP/files.nul"; then echo "Tracked filename contains a newline"; exit 1; fi
           rc=0
-          grep -zEi '\.(jks|keystore|p12|pkcs12|pfx|pem|p8|key|crt|der|gpg|asc|p7b|mobileprovision|cer)$|(^|/)(keystore\.properties|key\.properties|signing\.properties|google-services\.json|id_rsa[^/]*|\.envrc)$|(^|/)[^/]*\.env(\.[^/]*)?$|(^|/)\.env(\.[^/]*)?$' "$RUNNER_TEMP/files.nul" | grep -zvE '(^|/)\.env\.(example|sample)$' | tr '\0' '\n' > "$RUNNER_TEMP/forbidden.txt" || rc=$?
+          grep -zEi '(^|/)\.env/|\.(jks|keystore|p12|pkcs12|pfx|pem|p8|key|crt|der|gpg|asc|p7b|mobileprovision|cer)$|(^|/)(keystore\.properties|key\.properties|signing\.properties|google-services\.json|id_rsa[^/]*|\.envrc)$|(^|/)[^/]*\.env(\.[^/]*)?$|(^|/)\.env(\.[^/]*)?$' "$RUNNER_TEMP/files.nul" > "$RUNNER_TEMP/hits.nul" || rc=$?
           if [ "$rc" -gt 1 ]; then echo "check errored (rc=$rc)"; exit 2; fi
+          rc=0; grep -zvE '(^|/)\.env\.(example|sample)$' "$RUNNER_TEMP/hits.nul" | tr '\0' '\n' > "$RUNNER_TEMP/forbidden.txt" || rc=$?
+          if [ "$rc" -gt 1 ]; then echo "filter errored (rc=$rc)"; exit 2; fi
           if [ -s "$RUNNER_TEMP/forbidden.txt" ]; then echo "Forbidden files tracked:"; cat "$RUNNER_TEMP/forbidden.txt"; exit 1; fi
       - name: No obvious secrets in tree or history
         run: |
@@ -56,14 +58,15 @@ jobs:
       - name: shellcheck (by extension and by first-line shebang)
         run: |
           sh_re='^#![[:space:]]*(/usr/bin/env[[:space:]]+(-S[[:space:]]+)?|/[^[:space:]]*/)(ba|da|k)?sh([[:space:]]|$)'
+          git ls-files -z > "$RUNNER_TEMP/all.nul"
           : > "$RUNNER_TEMP/scripts.list"
           while IFS= read -r -d '' f; do
             { [ -f "$f" ] && [ ! -L "$f" ]; } || continue
             case "$f" in
               *.sh|*.bash) printf '%s\0' "$f" >> "$RUNNER_TEMP/scripts.list"; continue ;;
             esac
-            first=$(head -n1 -- "$f" 2>/dev/null | tr -d '\0' | head -c 200 || true)
+            first=$(head -n1 -- "$f" 2>/dev/null | tr -d '\0' | head -c 200 | sed '1s/^\xEF\xBB\xBF//' || true)
             if [[ "$first" =~ $sh_re ]]; then printf '%s\0' "$f" >> "$RUNNER_TEMP/scripts.list"; fi
-          done < <(git ls-files -z)
+          done < "$RUNNER_TEMP/all.nul"
           if [ ! -s "$RUNNER_TEMP/scripts.list" ]; then echo "no shell scripts"; exit 0; fi
           xargs -0 shellcheck -S warning -- < "$RUNNER_TEMP/scripts.list"
