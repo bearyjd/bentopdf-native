@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { test, after } = require('node:test');
-const { buildAppHeaders, scriptSources, tightenCsp } = require('../src/headers');
+const { buildAppHeaders, scriptSources } = require('../src/headers');
 
 const dirs = [];
 function dist(headerLines, extra = () => {}) {
@@ -54,7 +54,7 @@ const REJECTED = {
 };
 for (const directive of ['script-src', 'script-src-elem', 'script-src-attr', 'worker-src']) {
   for (const [label, token] of Object.entries(REJECTED)) {
-    // blob: is accepted in worker-src and stripped (not refused) from script-src; see the tightenCsp test.
+    // blob: has its own tests: accepted in worker-src, reasoned allowlist in script-src.
     if (token === 'blob:' && (directive === 'worker-src' || directive === 'script-src')) continue;
     test(`${directive} rejects ${label}`, () => {
       const csp = `Content-Security-Policy: default-src 'self'; ${directive} 'self' ${token}`;
@@ -89,13 +89,13 @@ test('scriptSources falls back to default-src', () => {
   assert.deepEqual(scriptSources("default-src 'none'; script-src 'self' blob:"), ["'self'", 'blob:']);
 });
 
-test('blob: is dropped from script-src only; worker-src keeps it', () => {
-  assert.equal(
-    tightenCsp("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:"),
-    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:"
-  );
-  const served = buildAppHeaders(dist(["Content-Security-Policy: default-src 'self'; script-src 'self' blob:; worker-src blob:"]));
-  assert.equal(served['Content-Security-Policy'], "default-src 'self'; script-src 'self'; worker-src blob:");
+test('blob: is served in script-src only via the reasoned allowlist, and never in script-src-elem/-attr', () => {
+  const csp = "Content-Security-Policy: default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:";
+  assert.throws(() => buildAppHeaders(dist([csp]), { allowedUnsafe: {} }), /script-src has blob:/);
+  assert.equal(buildAppHeaders(dist([csp]))['Content-Security-Policy'], csp.replace('Content-Security-Policy: ', ''));
+  for (const directive of ['script-src-elem', 'script-src-attr']) {
+    assert.throws(() => buildAppHeaders(dist([`Content-Security-Policy: default-src 'self'; ${directive} blob:`])), /allowlist/, directive);
+  }
 });
 
 test('the real dist CSP is accepted only through the documented unsafe-eval allowlist', () => {
@@ -103,5 +103,5 @@ test('the real dist CSP is accepted only through the documented unsafe-eval allo
   if (!fs.existsSync(path.join(real, '_headers'))) return;
   assert.throws(() => buildAppHeaders(real, { allowedUnsafe: {} }), /unsafe-eval/);
   const csp = buildAppHeaders(real)['Content-Security-Policy'];
-  assert.match(csp, /script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval';/);
+  assert.match(csp, /script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob:;/);
 });

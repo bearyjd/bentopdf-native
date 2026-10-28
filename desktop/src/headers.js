@@ -12,14 +12,19 @@ const ALLOWED_UNSAFE_SCRIPT_SOURCES = Object.freeze({
     'LibreOffice WASM (Word/Excel/PowerPoint to PDF): without it the page throws "EvalError: Evaluating a string as ' +
     'JavaScript violates ... unsafe-eval" and the conversion dies with "WASM initialization timeout" ' +
     '(experiment in docs/m2-findings.md). Everything else exercised works with only wasm-unsafe-eval.',
+  'blob:':
+    'Ghostscript (compress, PDF/A, font-to-outline, greyscale ...): ghostscript-loader fetches gs.js and runs ' +
+    'import(URL.createObjectURL(new Blob([gs.js]))), a blob: module script governed by script-src. Removing blob: ' +
+    'made the loader fail with "Failed to fetch dynamically imported module" (test/csp-smoke probe `ghostscript`). ' +
+    'CSP cannot scope blob: to one tool, so it is allowed for script-src; script-src-elem/attr stay blob-free.',
 });
 
 /**
  * Token ALLOWLIST for every directive that decides where code may come from.
  * Anything not listed (unsafe-inline, unsafe-hashes, strict-dynamic, *, data:,
  * filesystem:, https:, hosts, hashes, nonces, ...) is refused. 'none' only
- * tightens. blob: is allowed in worker-src alone (workers are spawned from
- * blob URLs; script-src has it stripped by tightenCsp).
+ * tightens. blob: is allowed in worker-src (workers are spawned from blob
+ * URLs) and in script-src only through the reasoned allowlist above.
  */
 const SAFE_CODE_SOURCES = Object.freeze(["'self'", "'wasm-unsafe-eval'", "'none'"]);
 const CODE_DIRECTIVES = Object.freeze(['script-src', 'script-src-elem', 'script-src-attr', 'worker-src']);
@@ -67,23 +72,6 @@ function scriptSources(csp) {
   return directives.get('script-src') || directives.get('default-src') || [];
 }
 
-/**
- * Drop `blob:` from script-src: nothing exercised needs it (workers are
- * governed by worker-src, which keeps blob:), and it lets page-created blobs
- * run as scripts. Re-add per tool only with a failing test as evidence.
- */
-function tightenCsp(csp) {
-  return csp
-    .split(';')
-    .map((part) => {
-      const [name, ...values] = part.trim().split(/\s+/);
-      if (name.toLowerCase() !== 'script-src') return part.trim();
-      return [name, ...values.filter((v) => v.toLowerCase() !== 'blob:')].join(' ');
-    })
-    .filter(Boolean)
-    .join('; ');
-}
-
 function assertCodeSourcesFailClosed(csp, allowed) {
   const directives = parseDirectives(csp);
   const checked = CODE_DIRECTIVES.filter((name) => directives.has(name));
@@ -92,7 +80,9 @@ function assertCodeSourcesFailClosed(csp, allowed) {
   for (const name of checked.filter((n) => directives.has(n))) {
     for (const source of directives.get(name)) {
       const lower = source.toLowerCase();
-      if (SAFE_CODE_SOURCES.includes(lower) || allowed[lower]) continue;
+      if (SAFE_CODE_SOURCES.includes(lower)) continue;
+      // Reasoned exceptions apply to script-src only, never to script-src-elem/-attr/worker-src.
+      if (name === 'script-src' && allowed[lower]) continue;
       if (name === 'worker-src' && lower === 'blob:') continue;
       throw new Error(`CSP ${name} has ${source}, which is not on the code-source allowlist; refusing to serve`);
     }
@@ -115,13 +105,12 @@ function buildAppHeaders(distDir, { allowedUnsafe = ALLOWED_UNSAFE_SCRIPT_SOURCE
   if (/\bhttps?:/.test(bundleCsp)) {
     throw new Error('dist CSP contains an external http(s) origin; refusing to serve');
   }
-  const csp = tightenCsp(bundleCsp);
-  assertCodeSourcesFailClosed(csp, allowedUnsafe);
+  assertCodeSourcesFailClosed(bundleCsp, allowedUnsafe);
   const forced = new Set(Object.keys(ISOLATION_HEADERS).map((k) => k.toLowerCase()));
   const kept = Object.fromEntries(
     Object.entries(parsed).filter(([name]) => !forced.has(name.toLowerCase()))
   );
-  return Object.freeze({ ...kept, 'Content-Security-Policy': csp, ...ISOLATION_HEADERS });
+  return Object.freeze({ ...kept, 'Content-Security-Policy': bundleCsp, ...ISOLATION_HEADERS });
 }
 
-module.exports = { buildAppHeaders, tightenCsp, parseGlobalHeaders, scriptSources, ISOLATION_HEADERS };
+module.exports = { buildAppHeaders, parseGlobalHeaders, scriptSources, ISOLATION_HEADERS };
