@@ -88,49 +88,50 @@ Signing keys/certs are never committed; env vars or CI secrets only.
 
 ## M4 entry criteria (do not start packaging before these have an answer)
 
-Status after the Linux packaging pass (details and commands:
+Status after the Linux packaging pass and its review fixes (details and commands:
 [desktop-linux.md](desktop-linux.md)). `[x]` means demonstrated on the dev
 host (Fedora/Bazzite, Electron 45.1.0, headless) with the evidence named;
-anything not proven says NOT VERIFIED.
+`[~]` means decided or partly shown; anything not proven says NOT VERIFIED.
 
-- [x] Chromium sandbox strategy for AppImage and Flatpak. **No `--no-sandbox`.**
-  Prove the renderer is actually sandboxed in each artifact.
-  AppImage: user-namespace sandbox; headless smoke test reads
-  `/proc/<renderer>/status`: `Seccomp: 2`, `NoNewPrivs: 1`, `CapEff: 0`, own
-  user namespace. Flatpak: zypak sub-sandbox, same `/proc` values from the
-  installed Flatpak. Negative control: `--no-sandbox` makes the test fail
-  (`Seccomp: 0`). Hosts without user namespaces: hardened AppRun refuses to
-  start with a message (simulated by a failing `unshare`, not on a real
-  AppArmor-restricted Ubuntu: NOT VERIFIED there). deb/rpm: the postinst (read from the built packages) sets
-  `chrome-sandbox` to 4755 only when `unshare --user` fails at install time,
-  otherwise 0755; installing and running that path is NOT VERIFIED (cannot install here).
+- [~] Chromium sandbox strategy for AppImage and Flatpak. **No `--no-sandbox`.**
+  Shown: AppImage (user-namespace sandbox) and the installed Flatpak (zypak): the headless
+  smoke test reads `/proc/<renderer>/status`: `Seccomp: 2`, `NoNewPrivs: 1`, `CapEff: 0`.
+  Negative control: `--no-sandbox` makes the test fail. Hosts without user namespaces: the
+  hardened AppRun refuses to start (simulated with a failing `unshare`; NOT VERIFIED on a real
+  AppArmor-restricted Ubuntu). deb/rpm: payload ships `chrome-sandbox` 0755; the post-install
+  script (non-root userns probe, AppArmor-aware, setuid only as fallback) is read and gated, but
+  installing it is NOT VERIFIED (needs root/layering).
 - [x] Electron fuses: RunAsNode off, NODE_OPTIONS off, inspect arguments off,
-  OnlyLoadAppFromAsar on, cookie encryption on (plus asar-integrity on,
-  file-protocol privileges off). `desktop/tools/check-fuses.js` reads the
-  built binary; 7 of 7 in unpacked, AppImage, deb and rpm. Whether asar
-  integrity is *enforced* on Linux: NOT VERIFIED.
+  OnlyLoadAppFromAsar on, cookie encryption on, file-protocol privileges off, read from the built
+  binary (`desktop/tools/check-fuses.js`; unpacked, AppImage, deb, rpm). The asar-integrity fuse
+  is on but NOT relied upon: probably a no-op on Linux.
 - [x] asar vs unpacked decision for the WASM payloads (Range reads, size):
-  app code in `app.asar` (48 KB), 368 MB / 4,394-file payload as an
+  app code in `app.asar` (~50 KB), 368 MB / 4,394-file payload as an
   extraResource outside it; file list identical to `dist/`.
-- [x] `BENTO_DIST` / `BENTO_TRANSPORT` and any other environment overrides
-  disabled in release: static check of the extracted `main.js` in every
-  artifact plus the AppImage and Flatpak smoke runs with hostile values set
-  (`flatpak run` forwards the variable; checked with `sh -c 'echo $BENTO_DIST'`).
-- [x] Desktop entry, MIME type and file association for `.pdf`: in all four
-  formats (`verify-artifact.sh` for AppImage/deb/rpm, `desktop-file-validate` and
-  `appstreamcli validate` for the Flatpak files). End-to-end open-with is proven
-  at the argv/second-instance level (smoke test); a real file manager launch
-  is NOT VERIFIED.
-- [x] Wayland flags decided: `--ozone-platform-hint=auto` in entries and the
-  Flatpak wrapper. Tested only headless; a visible Wayland/X11 window is NOT VERIFIED.
+- [x] `BENTO_DIST` / `BENTO_TRANSPORT` and other environment overrides disabled in release:
+  static check of the extracted `main.js` in every artifact plus AppImage and Flatpak smoke runs
+  with hostile values. Launch switches that disable the sandbox, enable inspect or `--js-flags` are
+  refused (`src/argv-policy.js`, unit-tested).
+- [~] Desktop entry, MIME type and file association for `.pdf`: present and gated in all four
+  formats (`verify-artifact.sh`; Flatpak files also by `desktop-file-validate`/`appstreamcli`). Open-with
+  is proven at argv/second-instance level only (smoke test); a real file-manager launch is NOT VERIFIED.
+- [~] Wayland: **decided** (`--ozone-platform-hint=auto` in entries and the Flatpak wrapper).
+  A visible window under Wayland or X11 was NOT VERIFIED (only headless was run).
 - [x] Deliberately no auto-update; stated in desktop-linux.md and in the About dialog.
-- [x] Ship Electron's `LICENSE` and `LICENSES.chromium.html`, verified inside
-  each built AppImage/deb/rpm by `packaging/verify-artifact.sh` (Flatpak ships
-  the same tree; the gate was not run against the Flatpak bundle).
-- [x] `SOURCE.txt` provenance for the Electron binary (version and checksum),
-  plus repo SHA, upstream tag/commit, build date.
-- [x] AGPL corresponding-source offer reachable from Help/About (unit-tested
-  text and menu wiring; the dialog itself was not opened: NOT VERIFIED visually).
+- [x] Ship Electron's `LICENSE` and `LICENSES.chromium.html`, gated in the AppImage, deb, rpm and
+  the Flatpak build tree (`verify-artifact.sh`). The CI workflow gates AppImage/deb/rpm only; the
+  Flatpak is built and gated locally, **not in CI**.
+- [~] `SOURCE.txt` provenance: repo commit, upstream tag/commit, Electron version and checksum, build
+  date, release-tag line and PR/branch. The gate fails on a commit that is not the checkout's HEAD or on
+  a dirty tree; artifacts were rebuilt from the final commit. A release must come from a tagged
+  commit on main (workflow check, NOT VERIFIED on GitHub: the workflow never ran).
+- [~] Licence check: `NOTICE` still has unresolved lines (`packaging/check-notice.sh` prints the
+  count); tag builds fail while any remain, other builds are named NOT FOR RELEASE. So no release can
+  be cut yet. The icon is self-made; the product name's trademark status is NOT VERIFIED (rename
+  recommended; one-file change, see desktop-linux.md "Renaming").
+- [x] AGPL corresponding-source offer reachable from Help/About (unit-tested text and menu wiring,
+  and gated in the artifact; the dialog itself was never opened: NOT VERIFIED visually).
+- [x] Release gate mutation-tested: `packaging/test-verify-artifact.sh` (every mutation must fail the gate).
 
 Still open for M4: macOS/Windows packaging (CI only, not built), signing and
 notarization hooks, the 100+ MB PDF and multi-page OCR memory report, and a
