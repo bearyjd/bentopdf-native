@@ -178,7 +178,6 @@ jobs:
           path: |
             desktop/release/*.exe
             desktop/release/SHA256SUMS
-            desktop/release/builder-effective-config.yaml
           if-no-files-found: error
           retention-days: 14
 
@@ -198,7 +197,9 @@ jobs:
         run: |
           flags=()
           [ "$IS_TAG" = true ] && flags+=(--release)
-          cfg=desktop/release/builder-effective-config.yaml
+          # electron-builder does not write its effective config here; scan the resolved config object instead.
+          cfg="$(cygpath -u "$RUNNER_TEMP")/win-builder-config.json"
+          (cd desktop && node -e "require('fs').writeFileSync(process.argv[1], JSON.stringify(require('./electron-builder.win.config'), null, 1))" "$(cygpath -m "$cfg")")
           for f in desktop/release/*-setup-*.exe desktop/release/*-portable-*.exe; do
             [ -f "$f" ] || { echo "::error::no artifact matches the glob (got '$f')"; exit 1; }
             bash packaging/verify-artifact-win.sh "${flags[@]}" --config "$cfg" "$f"

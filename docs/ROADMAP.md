@@ -139,3 +139,23 @@ host (Fedora/Bazzite, Electron 45.1.0, headless) with the evidence named;
 Still open for M4: macOS/Windows packaging (CI only, not built), signing and
 notarization hooks, the 100+ MB PDF and multi-page OCR memory report, and a
 real run of `.github/workflows/desktop-linux.yml` on GitHub (NOT VERIFIED).
+
+## Windows x64 packaging (branch feat/m5-windows-packaging)
+
+Details, commands and the full NOT VERIFIED list: [desktop-windows.md](desktop-windows.md). The dev host is
+Linux with no Wine, so only a GitHub Actions run on `windows-latest` can prove anything about Windows;
+`[x]` below means a Windows CI run showed it (run ids in desktop-windows.md), `[~]` means shown on Linux
+only or partly, `[ ]` means not shown. Ticks are updated from the last run, not from intent.
+
+- [~] NSIS installer (per-user, not one-click, choosable folder, desktop and Start-menu shortcuts) and portable exe.
+  The config builds a real `win-unpacked` tree on Linux; the NSIS step needs Wine and only ran in CI.
+- [~] `.pdf` "Open with" registered under `OpenWithProgids` only (no default takeover), removed on uninstall.
+  Open-with argument handling (drive letters, UNC refused, `file:///C:/`, long paths) is unit-tested on every OS.
+- [~] Same hardening as Linux: fuses via the shared `afterPack`, WASM outside the asar, `BENTO_*` ignored when packaged,
+  `/switch` treated as a switch on win32 (from the Chromium source, not measured), Windows path rules for static files.
+- [~] Windows release gate (`verify-artifact-win.sh`) and its mutation test (39 mutations caught on Linux against a real Windows tree).
+- [~] CI workflow `desktop-windows.yml` (bundle built on Linux, packaged on `windows-latest`, install/smoke/uninstall).
+- [ ] Code signing: optional via secrets, never exercised. Unsigned builds trigger SmartScreen.
+- [ ] A release: `NOTICE` has unresolved lines (now including NSIS and Windows Electron DLLs), so tag builds fail by design.
+- [ ] A visible window on Windows (only the hidden test mode was ever run), real Explorer double-click, all-users install.
+

@@ -18,6 +18,8 @@ SETUP="${1:?usage: smoke-installer.sh <setup.exe> <portable.exe> [--expect-commi
 PORTABLE="${2:?usage: smoke-installer.sh <setup.exe> <portable.exe>}"
 shift 2
 GATE_ARGS=("$@")
+# Git for Windows is a native program: give it a Windows path (arguments are not converted, see above).
+HEAD_COMMIT="$(git -C "$(cygpath -m "$ROOT")" rev-parse HEAD)"
 win() { cygpath -w "$1"; }
 native() { cygpath -m "$1"; }
 
@@ -45,8 +47,8 @@ exists() { [ -e "$1" ]; }
 reg_key() { reg query "$1"; }
 reg_value() { reg query "$1" /v "$2"; }
 uninstall_entry() { reg query "$UNINSTALL_ROOT" /s /f "$PRODUCT" /d | grep -q "DisplayName"; }
-pdf_default() { # the DEFAULT value of HKCU\Software\Classes\.pdf ("absent" when the key is missing)
-  powershell.exe -NoProfile -Command "\$k = Get-Item -LiteralPath 'HKCU:\Software\Classes\.pdf' -ErrorAction SilentlyContinue; if (\$k) { '[' + \$k.GetValue('') + ']' } else { 'absent' }" | tr -d '\r'
+pdf_default() { # the DEFAULT value of HKCU\Software\Classes\.pdf ("none" when the key is missing or has no default value)
+  powershell.exe -NoProfile -Command "\$k = Get-Item -LiteralPath 'HKCU:\Software\Classes\.pdf' -ErrorAction SilentlyContinue; if (\$k -and \$k.GetValue('')) { '[' + \$k.GetValue('') + ']' } else { 'none' }" | tr -d '\r'
 }
 lnk_field() { # file field
   powershell.exe -NoProfile -Command "(New-Object -ComObject WScript.Shell).CreateShortcut('$(win "$1")').$2" | tr -d '\r'
@@ -83,7 +85,7 @@ check "ProgID shell\\open\\command runs the installed exe with \"%1\" only" comm
 if [ "$(pdf_default)" = "$DEFAULT_BEFORE" ]; then note "ok   the HKCU .pdf default value was left untouched"; else note "FAIL the HKCU .pdf default value changed: $(pdf_default)"; FAILED=$((FAILED + 1)); fi
 
 # ---- gate and smoke on the installed tree ---------------------------------------------------------
-check "release gate on the installed tree" bash "$ROOT/packaging/verify-artifact-win.sh" "${GATE_ARGS[@]}" --tree "$INSTALL_DIR" --kind installed
+check "release gate on the installed tree" bash "$ROOT/packaging/verify-artifact-win.sh" --expect-commit "$HEAD_COMMIT" "${GATE_ARGS[@]}" --tree "$INSTALL_DIR" --kind installed
 note "--- packaged smoke (installed app)"
 if node "$(native "$ROOT/desktop/test/packaged-smoke-win.js")" "$(win "$EXE")" | tee "$TMPROOT/smoke-installed.log"; then note "ok   packaged smoke (installed)"; else note "FAIL packaged smoke (installed)"; FAILED=$((FAILED + 1)); fi
 [ -z "${GITHUB_STEP_SUMMARY:-}" ] || { echo '```'; cat "$TMPROOT/smoke-installed.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

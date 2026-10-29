@@ -144,7 +144,9 @@ async function main() {
   } finally {
     killTree(first.child);
     await wait(1500);
-    process.stdout.write(`first instance stderr (first 600 chars): ${first.stderr.slice(0, 600).replace(/\s+/g, ' ')}\n`);
+    process.stdout.write(`first instance stderr (first 3000 chars): ${first.stderr.slice(0, 3000).replace(/\s+/g, ' ')}\n`);
+    const events = path.join(profile, 'bento-test-events.log');
+    process.stdout.write(`test events:\n${fs.existsSync(events) ? fs.readFileSync(events, 'utf8').slice(0, 4000) : '(none)'}\n`);
   }
   await slashSwitchRefused();
 }

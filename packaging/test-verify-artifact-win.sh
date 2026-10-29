@@ -166,7 +166,7 @@ attempt ".pfx signing key in payload" m_pfx
 attempt ".pem inside the bundle" m_pem
 attempt ".env file in payload" m_env_file
 # Git Bash's `ln -s` silently COPIES unless native symlinks are enabled, so only count this mutation when a real link came out.
-w="$T/work"; [ ! -e "$w" ] || { chmod -R u+w "$w"; rm -r "$w"; }; cp -a "$BASE" "$w"; m_symlink "$w"
+w="$T/work"; [ ! -e "$w" ] || { chmod -R u+w "$w"; rm -r "$w"; }; cp -a "$BASE" "$w"; m_symlink "$w" 2>/dev/null || true
 if [ ! -L "$w/resources/link" ]; then SKIPPED=$((SKIPPED + 1)); TABLE+="symlink in payload                              SKIPPED (this shell cannot create symlinks)"$'\n'
 elif run_gate "$w"; then record_missed "symlink in payload"; else record_caught "symlink in payload"; fi
 

@@ -49,6 +49,13 @@ function logProcessSandbox() {
   fs.writeFileSync(path.join(app.getPath('userData'), 'bento-test-sandbox.json'), json);
 }
 
+// Test mode only: append-and-flush events next to the profile. stderr from a process that exits right
+// after writing can be lost on Windows pipes, and the second-instance smoke needs both sides' events.
+function testLog(message) {
+  if (!testHeadless()) return;
+  fs.appendFileSync(path.join(app.getPath('userData'), 'bento-test-events.log'), `${process.pid} ${message}\n`);
+}
+
 function installMenu() {
   const showAbout = () =>
     dialog.showMessageBox({
@@ -73,6 +80,7 @@ if (refused.length > 0) {
   app.exit(2);
 } else if (!app.requestSingleInstanceLock()) {
   log('another instance is already running; exiting');
+  testLog('lock denied: this is the second instance, exiting');
   app.quit();
 } else {
   let handle = null;
@@ -85,11 +93,15 @@ if (refused.length > 0) {
         waiting.push(filePath);
         continue;
       }
-      handle.openPath(filePath).catch((err) => log(`refused to open ${path.basename(filePath)}: ${err.message}`));
+      handle.openPath(filePath).then(
+        () => testLog(`granted ${path.basename(filePath)}`),
+        (err) => { log(`refused to open ${path.basename(filePath)}: ${err.message}`); testLog(`refused ${path.basename(filePath)}: ${err.message}`); }
+      );
     }
   };
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
+    testLog(`second-instance argv=${JSON.stringify(argv)} cwd=${workingDirectory}`);
     const unsafe = unsafeSwitches(argv, undefined, { secondInstance: true });
     if (unsafe.length > 0) {
       log(`ignored a second launch with unsafe switch(es): ${unsafe.join(' ')}`);

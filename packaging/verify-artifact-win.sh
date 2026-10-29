@@ -104,7 +104,7 @@ pass "Electron LICENSE, LICENSES.chromium.html, our LICENSE, NOTICE and SOURCE.t
 # ---- provenance -------------------------------------------------------------
 SRC="$RES/SOURCE.txt"
 if [ -z "$EXPECT_COMMIT" ]; then
-  EXPECT_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" || fail "cannot determine git HEAD; pass --expect-commit"
+  EXPECT_COMMIT="$(git -C "$(native "$ROOT")" rev-parse HEAD 2>/dev/null)" || fail "cannot determine git HEAD; pass --expect-commit"
 fi
 UP_COMMIT="$(tr -d '[:space:]' < "$ROOT/UPSTREAM_COMMIT")"
 [ -n "$UP_COMMIT" ] || fail "UPSTREAM_COMMIT is empty"
