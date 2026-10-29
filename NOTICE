@@ -63,6 +63,18 @@ installed package at the versions the build uses). They are NOT a legal review.
                                               Their sources are listed in /app/manifest.json inside the bundle.
                                               zypak and patch-electron-desktop-filename have EMPTY licence directories in that
                                               tree, so their licences are not evidenced by the bundle: NEEDS REVIEW.
+  - Windows packages (NSIS installer and portable exe; docs/desktop-windows.md) ... they ship the same Electron and Chromium
+                                              notices (LICENSE.electron.txt, LICENSES.chromium.html next to the .exe; gated by
+                                              packaging/verify-artifact-win.sh). What is additionally in the Windows Electron 45.1.0
+                                              download and was NOT licence-checked here: ffmpeg.dll (the LGPL statement read from
+                                              libffmpeg.so on Linux was NOT re-read from this DLL; `strings` found no licence line in it),
+                                              d3dcompiler_47.dll and dxcompiler.dll (Microsoft redistributables), vulkan-1.dll,
+                                              vk_swiftshader.dll, electron_wer.dll: NEEDS REVIEW.
+  - NSIS 3.0.4.1 stub and plugins (the installer and the portable exe are built from electron-builder's NSIS templates;
+                                              the NSIS runtime is compiled into every installer, the app payload is a 7z archive
+                                              extracted by the nsis7z plugin) ... NSIS is distributed under a zlib/libpng-style licence
+                                              with bzip2 and LZMA components, and the 7z plugin carries its own terms; none of these licence
+                                              texts ship in the installer and their terms were NOT read here: NEEDS REVIEW.
   - electron-builder 26.18.0, app-builder-lib 26.18.0, @electron/fuses 2.1.3 (build tools, not shipped in artifacts) ...
                                               MIT [installed package.json "license"]
   - BentoPDF logo ........................... no longer used. The application icon (packaging/icons/icon.svg and its PNG
