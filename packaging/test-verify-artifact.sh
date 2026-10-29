@@ -4,10 +4,13 @@
 # packaging/verify-artifact.sh FAILS. A positive control (the unmodified tree must pass)
 # runs first. Exit 0 only if every mutation was caught.
 #
-#   packaging/test-verify-artifact.sh [--deb F] [--rpm F] [--appimage F] [--flatpak DIR | --no-flatpak]
-#   packaging/test-verify-artifact.sh --appimage-only [--appimage F]   (partial run: no deb/rpm/flatpak cases; NOT a release check)
+#   packaging/test-verify-artifact.sh [--deb F] [--rpm F] [--appimage F] [--smoke-appimage F] [--flatpak DIR | --no-flatpak]
+#   packaging/test-verify-artifact.sh --appimage-only [--appimage F] [--smoke-appimage F]   (partial run: no deb/rpm/flatpak cases; NOT a release check)
+# The SMOKE-flavour AppImage (BENTO_FLAVOUR=smoke, desktop/release-smoke/) carries the real test-mode logic: the
+# marker-logic mutations run on it (gate --flavour smoke, kind shown as 'smoke'); the release trees get the
+# release-flavour mutations (issue #13).
 # Every mutation names the substring its FAIL line must contain: a case that fails for another reason counts as missed.
-# Defaults: the newest files in desktop/release/ and packaging/flatpak/.build/app.
+# Defaults: the newest files in desktop/release/, desktop/release-smoke/ and packaging/flatpak/.build/app.
 # GATE=<script> runs a different gate (used to show what an older gate missed); it must
 # accept the same --tree/--kind/--scripts arguments.
 set -euo pipefail
@@ -15,12 +18,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GATE="${GATE:-$ROOT/packaging/verify-artifact.sh}"
 REL="$ROOT/desktop/release"
-DEB="" RPM="" IMG="" FLAT="" WITH_FLATPAK=1 APPIMAGE_ONLY=0
+DEB="" RPM="" IMG="" SMOKE_IMG="" FLAT="" WITH_FLATPAK=1 APPIMAGE_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --deb) DEB="$2"; shift ;;
     --rpm) RPM="$2"; shift ;;
     --appimage) IMG="$2"; shift ;;
+    --smoke-appimage) SMOKE_IMG="$2"; shift ;;
     --flatpak) FLAT="$2"; shift ;;
     --no-flatpak) WITH_FLATPAK=0 ;;
     --appimage-only) APPIMAGE_ONLY=1; WITH_FLATPAK=0 ;;
@@ -32,8 +36,9 @@ newest() { find "$REL" -maxdepth 1 -name "$1" -print 2>/dev/null | sort | tail -
 [ -n "$DEB" ] || DEB="$(newest '*.deb')"
 [ -n "$RPM" ] || RPM="$(newest '*.rpm')"
 [ -n "$IMG" ] || IMG="$(newest '*.AppImage')"
+[ -n "$SMOKE_IMG" ] || SMOKE_IMG="$(find "$ROOT/desktop/release-smoke" -maxdepth 1 -name '*.AppImage' -print 2>/dev/null | sort | tail -n1)"
 [ -n "$FLAT" ] || FLAT="$ROOT/packaging/flatpak/.build/app"
-if [ "$APPIMAGE_ONLY" = 1 ]; then ARTIFACTS=("$IMG"); else ARTIFACTS=("$DEB" "$RPM" "$IMG"); fi
+if [ "$APPIMAGE_ONLY" = 1 ]; then ARTIFACTS=("$IMG" "$SMOKE_IMG"); else ARTIFACTS=("$DEB" "$RPM" "$IMG" "$SMOKE_IMG"); fi
 for f in "${ARTIFACTS[@]}"; do [ -f "$f" ] || { echo "missing artifact: '$f'" >&2; exit 2; }; done
 if [ "$WITH_FLATPAK" = 1 ]; then
   [ -d "$FLAT/files" ] || { echo "missing flatpak build dir: $FLAT (pass --no-flatpak to test without it)" >&2; exit 2; }
@@ -45,6 +50,8 @@ FIRST="${KINDS%% *}"
 
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
+# shellcheck source=packaging/asar-policy-mutations.sh
+. "$ROOT/packaging/asar-policy-mutations.sh"
 EXE_NAME="$(node -p "require('$ROOT/desktop/brand.json').executableName")"
 ASAR="$ROOT/desktop/node_modules/.bin/asar"
 [ -x "$ASAR" ] || { echo "asar tool missing (npm ci in desktop/)" >&2; exit 2; }
@@ -63,7 +70,7 @@ slim() { # tree
   # keep every mode and name, drop the bytes the gate does not read (the executable is kept for the fuse check)
   find "$1" -type f -size +1M ! -name "$EXE_NAME" -exec truncate -s 1 {} +
 }
-mkdir -p "$T/base/appimage"
+mkdir -p "$T/base/appimage" "$T/base/smoke"
 if [ "$APPIMAGE_ONLY" = 0 ]; then
   mkdir -p "$T/base/deb" "$T/base/rpm"
   (umask 000 && dpkg-deb -x "$DEB" "$T/base/deb")
@@ -74,15 +81,19 @@ if [ "$APPIMAGE_ONLY" = 0 ]; then
   mkdir "$T/base/rpm.scripts"
   rpm -qp --scripts "$RPM" > "$T/base/rpm.scripts/rpm-scripts.txt"
 fi
-(umask 000 && cd "$T/base/appimage" && cp "$IMG" ./img && chmod +x ./img && ./img --appimage-extract >/dev/null && rm ./img)
+for pair in "appimage:$IMG" "smoke:$SMOKE_IMG"; do
+  (umask 000 && cd "$T/base/${pair%%:*}" && cp "${pair#*:}" ./img && chmod +x ./img && ./img --appimage-extract >/dev/null && rm ./img)
+done
 if [ "$WITH_FLATPAK" = 1 ]; then
   mkdir "$T/base/flatpak"
   cp -a "$FLAT/." "$T/base/flatpak/"
 fi
-for k in $KINDS; do slim "$T/base/$k"; done
-mv "$T/base/appimage/squashfs-root" "$T/base/appimage.tree"
-rmdir "$T/base/appimage"
-mv "$T/base/appimage.tree" "$T/base/appimage"
+for k in $KINDS smoke; do slim "$T/base/$k"; done
+for k in appimage smoke; do
+  mv "$T/base/$k/squashfs-root" "$T/base/$k.tree"
+  rmdir "$T/base/$k"
+  mv "$T/base/$k.tree" "$T/base/$k"
+done
 mkdir "$T/base/appimage.scripts"
 
 appdir() { dirname "$(dirname "$(find "$1" -path '*/resources/app.asar' -print -quit)")"; }
@@ -94,8 +105,11 @@ run_gate() { # kind tree [extra gate args]  -> sets GATE_OUT, returns the gate's
   local kind="$1" tree="$2"; shift 2
   local scripts="$T/base/$kind.scripts"
   [ -d "$scripts" ] || scripts="$T/base/appimage.scripts"
+  # 'smoke' is the smoke-flavour AppImage: gated as an AppImage of the smoke flavour (a later --flavour wins).
+  local flavour=(--flavour release)
+  if [ "$kind" = smoke ]; then kind=appimage; flavour=(--flavour smoke); fi
   set +e
-  GATE_OUT="$("$GATE" --expect-commit "$EXPECT" --tree "$tree" --kind "$kind" --scripts "$scripts" "$@" 2>&1)"
+  GATE_OUT="$("$GATE" --expect-commit "$EXPECT" "${flavour[@]}" --tree "$tree" --kind "$kind" --scripts "$scripts" "$@" 2>&1)"
   local rc=$?
   set -e
   return $rc
@@ -155,10 +169,10 @@ attempt_ok() { # name kind mutation-function
 }
 
 # ---- positive controls -------------------------------------------------------------------------
-for k in $KINDS; do
+for k in $KINDS smoke; do
   if ! run_gate "$k" "$T/base/$k"; then printf '%s\n' "$GATE_OUT" | tail -5 >&2; echo "positive control failed: the unmodified $k tree must pass" >&2; exit 1; fi
 done
-echo "positive controls: unmodified $KINDS trees pass the gate"
+echo "positive controls: unmodified $KINDS trees and the smoke-flavour AppImage pass the gate"
 
 # ---- mutations -----------------------------------------------------------------------------------
 m_rm_chromium_lic() { rm "$(appdir "$1")/LICENSES.chromium.html"; }
@@ -300,16 +314,6 @@ for k in $KINDS; do
   attempt "test-mode marker as a symlink in the app dir" $k m_test_marker_symlink "test-mode marker .bento-test-mode is present"
   attempt "main.js stops gating test mode on the marker" $k m_marker_gate_gone "does not gate packaged test mode on the marker"
   attempt "process.env read outside the guard" $k m_env_elsewhere "not one of the known guarded lines"
-  attempt "marker: hasTestMarker returns true" $k m_marker_returns_true "packaged marker logic"
-  attempt "marker: nlink check removed" $k m_marker_nlink_removed "packaged marker logic: hard-linked marker"
-  attempt "marker: nlink check reworded (static layer)" $k m_marker_nlink_weakened "lost the marker control: st.nlink"
-  attempt "marker: owner check removed" $k m_marker_uid_removed "packaged marker logic: marker owned by another uid"
-  attempt "marker: group/world-writable check removed" $k m_marker_mask_removed "packaged marker logic: group-writable marker"
-  attempt "marker: O_NOFOLLOW removed" $k m_marker_nofollow_removed "packaged marker logic: symlinked marker"
-  attempt "marker: token compare loosened" $k m_marker_token_loose "packaged marker logic: marker with a same-length, same-prefix token"
-  attempt "marker: realpath check removed" $k m_marker_realpath_removed "packaged marker logic: resources path through a symlink"
-  attempt "argv policy: marker condition dropped" $k m_argv_marker_dropped "packaged marker logic: packaged + env, no marker"
-  attempt "argv policy: marker condition truthy, not === true" $k m_argv_marker_truthy "packaged marker logic: packaged + env, truthy non-true marker"
   attempt "main.js passes a constant false as the marker" $k m_main_marker_constant "does not gate packaged test mode on the marker"
   attempt "process.env read appended to the argv-check line" $k m_env_on_exempt_line "not one of the known guarded lines"
   attempt "process[\"env\"] read appended to the overrides line" $k m_env_on_exempt_line2 "not one of the known guarded lines"
@@ -320,7 +324,8 @@ for k in $KINDS; do
   attempt_ok "block comment mentioning process.env is accepted" $k m_env_in_block_comment
   attempt "argv policy not applied to own argv" $k m_argv_policy_gone "does not check its own argv"
   attempt "argv policy not applied to second-instance argv" $k m_argv_second_gone "second-instance argv"
-  attempt "BENTO_TEST_HEADLESS honoured when packaged" $k m_headless_env_honoured "does not check its own argv"
+  # Release trees: the flavour token scan sees the test variable first (issue #13); the smoke tree case below proves the argv-line grep.
+  attempt "BENTO_TEST_HEADLESS honoured when packaged" $k m_headless_env_honoured "has test-only code (BENTO_TEST_HEADLESS"
   attempt "open-with magic-byte check removed" $k m_no_magic "does not check the %PDF- header"
   attempt "main.js stops refusing CHROME_DEVEL_SANDBOX" $k m_main_no_refusal "does not refuse to start when"
   attempt "main.js stops refusing ELECTRON_DISABLE_SANDBOX" $k m_main_no_refusal2 "does not refuse to start when"
@@ -330,6 +335,38 @@ for k in $KINDS; do
   attempt "remove the executable" $k m_rm_exe "missing executable"
   attempt "app.asar grows past 5 MB (bundle inside asar)" $k m_big_asar "suspiciously large"
 done
+# Smoke flavour only: the real marker logic is in the smoke AppImage (the release ones carry the stub).
+attempt "marker: hasTestMarker returns true" smoke m_marker_returns_true "packaged marker logic"
+attempt "marker: nlink check removed" smoke m_marker_nlink_removed "packaged marker logic: hard-linked marker"
+attempt "marker: nlink check reworded (static layer)" smoke m_marker_nlink_weakened "lost the marker control: st.nlink"
+attempt "marker: owner check removed" smoke m_marker_uid_removed "packaged marker logic: marker owned by another uid"
+attempt "marker: group/world-writable check removed" smoke m_marker_mask_removed "packaged marker logic: group-writable marker"
+attempt "marker: O_NOFOLLOW removed" smoke m_marker_nofollow_removed "packaged marker logic: symlinked marker"
+attempt "marker: token compare loosened" smoke m_marker_token_loose "packaged marker logic: marker with a same-length, same-prefix token"
+attempt "marker: realpath check removed" smoke m_marker_realpath_removed "packaged marker logic: resources path through a symlink"
+attempt "argv policy: marker condition dropped" smoke m_argv_marker_dropped "packaged marker logic: packaged + env, no marker"
+attempt "argv policy: marker condition truthy, not === true" smoke m_argv_marker_truthy "packaged marker logic: packaged + env, truthy non-true marker"
+attempt "BENTO_TEST_HEADLESS honoured when packaged" smoke m_headless_env_honoured "does not check its own argv"
+# Build flavours (issue #13): shared with test-asar-policy-mutations.sh and test-verify-artifact-win.sh.
+m_flavour_mutation() { # tree: applies FM_FILE / FM_EXPR to src/ inside app.asar
+  local ap x
+  ap="$(resdir "$1")/app.asar"; x="$T/asar-edit"
+  rm -rf "$x"; "$ASAR" extract "$ap" "$x"
+  apply_policy_mutation "$x/src" "$FM_FILE" "$FM_EXPR" || exit 2
+  "$ASAR" pack "$x" "$ap"; rm -rf "$x"
+}
+for entry in "${RELEASE_MUTATIONS[@]}"; do
+  IFS='|' read -r fm_name FM_FILE FM_EXPR <<<"$entry"
+  attempt "$fm_name" appimage m_flavour_mutation "build flavour"
+done
+for entry in "${POLICY_MUTATIONS[@]}"; do
+  IFS='|' read -r fm_name FM_FILE FM_EXPR <<<"$entry"
+  attempt "$fm_name" smoke m_flavour_mutation "re:build flavour|packaged marker logic"
+done
+m_none() { :; }
+attempt "release AppImage gated as smoke" appimage m_none "build flavour: src/build-flavour.js is not the smoke flavour file" --flavour smoke
+attempt "smoke AppImage gated as release" smoke m_none "build flavour: src/build-flavour.js is not the release flavour file" --flavour release
+attempt "smoke AppImage with --release" smoke m_none "a smoke artifact is never a release" --release
 for k in ${KINDS/flatpak/}; do
   attempt "chrome-sandbox setuid in the payload" $k m_sandbox_setuid "setuid/setgid"
   attempt "chrome-sandbox mode 0700" $k m_sandbox_0700 "chrome-sandbox payload mode"

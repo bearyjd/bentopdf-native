@@ -5,8 +5,10 @@
 # mutation copies it, breaks one thing and asserts that the gate FAILS. A positive control
 # (the unmodified tree must pass) runs first. Exit 0 only if every mutation was caught.
 #
-#   packaging/test-verify-artifact-win.sh [--seed <win-unpacked dir>] [--installer F --portable F]
-# Default seed: desktop/release/win-unpacked. With --installer/--portable the artifact-level
+#   packaging/test-verify-artifact-win.sh [--seed <win-unpacked dir>] [--smoke-seed <win-unpacked dir>] [--installer F --portable F]
+# Default seed: desktop/release/win-unpacked (RELEASE flavour); default smoke seed: desktop/release-smoke/win-unpacked
+# (SMOKE flavour, BENTO_FLAVOUR=smoke). The marker-logic mutations run on a copy of the base tree carrying the smoke
+# seed's app.asar (gate --flavour smoke); the release-flavour mutations on the release tree (issue #13). With --installer/--portable the artifact-level
 # paths (7z extraction) are exercised too; without them those cases are reported as SKIPPED.
 set -euo pipefail
 
@@ -15,10 +17,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/packaging/asar-policy-mutations.sh"
 GATE="${GATE:-$ROOT/packaging/verify-artifact-win.sh}"
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
-SEED="$ROOT/desktop/release/win-unpacked" INSTALLER="" PORTABLE=""
+SEED="$ROOT/desktop/release/win-unpacked" SMOKE_SEED="$ROOT/desktop/release-smoke/win-unpacked" INSTALLER="" PORTABLE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --seed) SEED="$2"; shift ;;
+    --smoke-seed) SMOKE_SEED="$2"; shift ;;
     --installer) INSTALLER="$2"; shift ;;
     --portable) PORTABLE="$2"; shift ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
@@ -27,6 +30,7 @@ while [ $# -gt 0 ]; do
 done
 PRODUCT="$(node -p "require(process.argv[1]).productName" "$(native "$ROOT/desktop/brand.json")")"
 [ -d "$SEED/resources" ] && [ -s "$SEED/$PRODUCT.exe" ] || { echo "seed '$SEED' is not an unpacked Windows build (pass --seed)" >&2; exit 2; }
+[ -s "$SMOKE_SEED/resources/app.asar" ] || { echo "smoke seed '$SMOKE_SEED' has no resources/app.asar (build with BENTO_FLAVOUR=smoke, pass --smoke-seed)" >&2; exit 2; }
 ASAR_JS="$(native "$ROOT/desktop/node_modules/@electron/asar/bin/asar.js")"
 
 T="$(mktemp -d)"
@@ -48,11 +52,15 @@ EXPECT="$(sed -n 's/^  commit: *//p' "$BASE/resources/SOURCE.txt" | head -n1)"
 [ -n "$EXPECT" ] || { echo "seed SOURCE.txt has no commit line" >&2; exit 2; }
 GATE_ARGS=(--expect-commit "$EXPECT")
 grep -q 'dirty=yes' "$BASE/resources/SOURCE.txt" && GATE_ARGS+=(--allow-dirty)
+# The smoke tree: the same payload with the smoke flavour's app.asar (the only file the flavours differ in).
+SMOKE_BASE="$T/smoke-base"
+cp -a "$BASE" "$SMOKE_BASE"
+cp "$SMOKE_SEED/resources/app.asar" "$SMOKE_BASE/resources/app.asar"
 
 run_gate() { # tree [extra gate args] -> sets GATE_OUT, returns the gate's status
   local tree="$1"; shift
   set +e
-  GATE_OUT="$("$GATE" "${GATE_ARGS[@]}" --tree "$tree" --kind unpacked "$@" 2>&1)"
+  GATE_OUT="$("$GATE" "${GATE_ARGS[@]}" --flavour "$ATTEMPT_FLAVOUR" --tree "$tree" --kind unpacked "$@" 2>&1)"
   local rc=$?
   set -e
   return $rc
@@ -64,11 +72,13 @@ TABLE=""
 record_caught() { PASSED=$((PASSED + 1)); TABLE+="$(printf '%-48s caught: %s' "$1" "$(printf '%s\n' "$GATE_OUT" | grep -m1 '^FAIL' | cut -c1-100)")"$'\n'; }
 record_missed() { MISSED=$((MISSED + 1)); MISSED_NAMES+=("$1"); TABLE+="$(printf '%-48s MISSED (gate passed)' "$1")"$'\n'; }
 
+# Which tree attempt() copies and which flavour the gate is told (release unless a block switches to smoke).
+ATTEMPT_BASE="$BASE" ATTEMPT_FLAVOUR=release
 attempt() { # name mutation-function [gate args]
   local name="$1" fn="$2"; shift 2
   local w="$T/work"
   [ ! -e "$w" ] || { chmod -R u+w "$w"; rm -r "$w"; }
-  cp -a "$BASE" "$w"
+  cp -a "$ATTEMPT_BASE" "$w"
   "$fn" "$w"
   if run_gate "$w" "$@"; then record_missed "$name"; else record_caught "$name"; fi
 }
@@ -85,6 +95,10 @@ edit_asar() { # tree sed-expression file-in-asar
 # ---- positive control -------------------------------------------------------------
 if ! run_gate "$BASE"; then printf '%s\n' "$GATE_OUT" | tail -5 >&2; echo "positive control FAILED: the unmodified tree must pass" >&2; exit 1; fi
 echo "positive control: unmodified tree passes ($(printf '%s\n' "$GATE_OUT" | grep -c '^ok:') checks)"
+ATTEMPT_FLAVOUR=smoke
+if ! run_gate "$SMOKE_BASE"; then printf '%s\n' "$GATE_OUT" | tail -5 >&2; echo "positive control FAILED: the unmodified smoke tree must pass --flavour smoke" >&2; exit 1; fi
+ATTEMPT_FLAVOUR=release
+echo "positive control: unmodified smoke tree passes --flavour smoke"
 
 PX="$PRODUCT.exe"
 m_no_electron_licence() { rm "$1/LICENSE.electron.txt"; }
@@ -117,7 +131,7 @@ m_override_honoured() { edit_asar "$1" "s/app.isPackaged || flavour === 'release
 m_sandbox_env_not_refused() { edit_asar "$1" "s/'CHROME_DEVEL_SANDBOX'/'CHROME_DEVEL_SANDBOX_MUTATED'/" src/main.js; }
 m_no_sandbox_in_code() { edit_asar "$1" 's/^.use strict.;/"use strict"; \/\/ MUTATED --no-sandbox/' src/menu.js; }
 m_window_always_shown() { edit_asar "$1" 's/const show = !testMode;/const show = true; \/\/ MUTATED/' src/main.js; }
-m_test_env_unmarked() { edit_asar "$1" 's/ \&\& (!policyOptions.packaged || policyOptions.testMarker === true) ? process.env : null;/ ? process.env : null; \/\/ MUTATED/' src/main.js; }
+m_test_env_unmarked() { edit_asar "$1" 's/const testEnv = testModeOn(process.env, policyOptions) ? process.env : null;/const testEnv = testModeOn(process.env, { packaged: false }) ? process.env : null; \/\/ MUTATED/' src/main.js; }
 m_marker_check_off() { edit_asar "$1" 's/testMarker: app.isPackaged \&\& hasTestMarker(process.resourcesPath)/testMarker: true \/\/ MUTATED/' src/main.js; }
 m_win_marker_always() { edit_asar "$1" "s/if (platform === 'win32') return hasTestMarkerWin32(resourcesPath, fsImpl);/if (platform === 'win32') return true; \/\/ MUTATED/" src/test-mode.js; }
 m_win_no_lstat_link() { edit_asar "$1" 's/lst.isSymbolicLink() || !lst.isFile()/!lst.isFile() \/\/ MUTATED/' src/test-mode.js; }
@@ -167,20 +181,37 @@ attempt "--no-sandbox inside app.asar" m_no_sandbox_in_code
 attempt "window always shown (no test mode)" m_window_always_shown
 attempt "test-only behaviour on env alone (no marker)" m_test_env_unmarked
 attempt "marker result ignored (testMarker: true)" m_marker_check_off
+attempt "process.env read outside the guard" m_env_elsewhere
+attempt "test-mode marker in resources/" m_marker_in_resources
+attempt "test-mode marker at the root, other case" m_marker_upper_root
+# Mutations of the marker logic, argv policy and build flavour (shared with test-asar-policy-mutations.sh and
+# test-verify-artifact.sh). RELEASE_MUTATIONS on the release tree; the marker logic exists only in the smoke tree.
+m_policy() {
+  local x="$T/asar-x"
+  [ ! -e "$x" ] || { chmod -R u+w "$x"; rm -r "$x"; }
+  node "$ASAR_JS" extract "$(native "$1/resources/app.asar")" "$(native "$x")"
+  apply_policy_mutation "$x/src" "$PM_FILE" "$PM_EXPR" || exit 2
+  node "$ASAR_JS" pack "$(native "$x")" "$(native "$1/resources/app.asar")"
+}
+for entry in "${RELEASE_MUTATIONS[@]}"; do
+  IFS='|' read -r pm_name PM_FILE PM_EXPR <<<"$entry"
+  attempt "$pm_name" m_policy
+done
+m_none() { :; }
+attempt "release tree gated as smoke" m_none --flavour smoke
+ATTEMPT_BASE="$SMOKE_BASE" ATTEMPT_FLAVOUR=smoke
 attempt "win32 marker check always true" m_win_marker_always
 attempt "win32 marker: symlink/junction not refused" m_win_no_lstat_link
 attempt "win32 marker: resources realpath unchecked" m_win_no_res_realpath
 attempt "win32 marker: reparse redirect unchecked" m_win_no_marker_realpath
 attempt "win32 marker: lstat/fstat swap unchecked" m_win_no_devino
-attempt "process.env read outside the guard" m_env_elsewhere
-attempt "test-mode marker in resources/" m_marker_in_resources
-attempt "test-mode marker at the root, other case" m_marker_upper_root
-# Mutations of the marker logic and argv policy (shared with the Linux-runnable test-asar-policy-mutations.sh).
-m_policy() { edit_asar "$1" "$PM_EXPR" "src/$PM_FILE"; }
 for entry in "${POLICY_MUTATIONS[@]}"; do
   IFS='|' read -r pm_name PM_FILE PM_EXPR <<<"$entry"
   attempt "$pm_name" m_policy
 done
+attempt "smoke tree gated as release" m_none --flavour release
+attempt "smoke tree with --release" m_none --release
+ATTEMPT_BASE="$BASE" ATTEMPT_FLAVOUR=release
 attempt "Windows open-with path rules removed" m_no_windows_path_rules
 attempt "Windows static path rules removed" m_no_static_rules
 attempt "bundle root not canonicalised natively" m_js_realpath
