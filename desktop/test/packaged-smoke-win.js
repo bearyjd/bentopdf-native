@@ -101,7 +101,29 @@ function dumpTraces() {
   }
 }
 
+// Diagnostic: launch a second instance with one kind of argument at a time and report exit code and whether it
+// reached main.js at all (its own trace file appears) -- isolates which argument kills it before JavaScript runs.
+async function probeVariants() {
+  const variants = {
+    'no file argument': [],
+    'plain ascii pdf': [pdfA],
+    'space + non-ascii pdf': [pdfB],
+    'file URL': [pathToFileURL(pdfC).href],
+    'UNC pdf': ['\\\\127.0.0.1\\c$\\unc-refused.pdf'],
+  };
+  for (const [name, args] of Object.entries(variants)) {
+    const before = new Set(fs.readdirSync(traceDir));
+    const probe = launch([...testArgs, ...args]);
+    const exited = await until(() => probe.child.exitCode !== null && { code: probe.child.exitCode }, 30000, 'probe exit').catch(() => ({ code: 'timeout' }));
+    const own = fs.readdirSync(traceDir).filter((f) => !before.has(f) && f.startsWith('trace-'));
+    process.stdout.write(`probe [${name}]: exit=${exited.code} reachedMainJs=${own.length > 0} stderr=${probe.stderr.slice(0, 200).replace(/\s+/g, ' ')}\n`);
+    killTree(probe.child);
+  }
+}
+
 async function secondInstance(cdp) {
+  await probeVariants();
+  const eventsBefore = readEvents().length; // evidence must come from the launch below, not from the probes
   await cdp.js('window.__opened = []; window.bentoDesktop.onFileOpened((f) => window.__opened.push(f.name)); true');
   // A backslash path with a space and a non-ASCII letter, a file:// URL, and a UNC path that must be refused.
   const second = launch([...testArgs, pdfB, pathToFileURL(pdfC).href, '\\\\127.0.0.1\\c$\\unc-refused.pdf']);
@@ -112,7 +134,7 @@ async function secondInstance(cdp) {
   await wait(1500);
   // The next two are only meaningful if the second-instance event provably arrived and was processed; with no
   // event, "nothing was granted" would look like "refused", so absence of evidence is a FAIL.
-  const events = readEvents();
+  const events = readEvents().slice(eventsBefore);
   const delivered = /second-instance argv=/.test(events);
   check('second-instance event arrived in the first instance (positive evidence)', delivered, delivered ? '' : 'no second-instance event in the test event log');
   check('second instance: UNC path was refused (no grant)', delivered && !events.includes('granted unc-refused.pdf') && !(await cdp.js('window.__opened.includes("unc-refused.pdf")')), delivered ? '' : 'FAIL: nothing delivered, refusal not proven');

@@ -67,5 +67,5 @@ test('unsafeSwitches: a bare -- ends the options; refused switches before it sti
 });
 
 test('open-with still accepts only file arguments and file:// URLs next to refused switches', () => {
-  assert.deepEqual(pdfPathsFromArgv(['exe', '--no-sandbox', 'https://x.example/a.pdf', '/d/a.pdf'], { cwd: '/' }), ['/d/a.pdf']);
+  assert.deepEqual(pdfPathsFromArgv(['exe', '--no-sandbox', 'https://x.example/a.pdf', '/d/a.pdf'], { cwd: '/', platform: 'linux' }), ['/d/a.pdf']);
 });

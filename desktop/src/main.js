@@ -18,7 +18,7 @@ const { dialog, Menu, shell } = require('electron');
 const { prepare, startApp, TRANSPORTS, log } = require('./app');
 const brand = require('../brand.json');
 const { aboutDetail, buildMenuTemplate, SOURCE_URL } = require('./menu');
-const { testHeadless, unsafeSwitches } = require('./argv-policy');
+const { testHeadless, testTraceDir, unsafeSwitches } = require('./argv-policy');
 const { pdfPathsFromArgv } = require('./open-file');
 
 // Decided by experiment, see docs/m2-findings.md.
@@ -59,8 +59,8 @@ function testLog(message) {
 // Test mode only, and only when the harness names a directory: one trace file per process, flushed on
 // every line, so a process that dies early (the second instance) still leaves evidence behind.
 function trace(message) {
-  const dir = process.env.BENTO_TEST_TRACE_DIR;
-  if (!testHeadless() || !dir) return;
+  const dir = testTraceDir();
+  if (!dir) return;
   try {
     fs.appendFileSync(path.join(dir, `trace-${process.pid}.log`), `${Date.now()} ${message}\n`);
   } catch (err) {

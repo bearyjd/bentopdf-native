@@ -37,6 +37,9 @@ const looksLikeSwitch = (arg, platform) =>
 /** Test mode (headless CI smoke): the window is never shown and test-only switches pass. */
 const testHeadless = (env = process.env) => env.BENTO_TEST_HEADLESS === '1';
 
+/** Test mode only: directory for per-process trace files (BENTO_TEST_TRACE_DIR), or undefined. */
+const testTraceDir = (env = process.env) => (testHeadless(env) ? env.BENTO_TEST_TRACE_DIR : undefined);
+
 function allowed(arg, testMode, secondInstance) {
   if (ALWAYS_ALLOWED.has(arg)) return true;
   if (secondInstance && SECOND_INSTANCE_INJECTED.has(arg)) return true;
@@ -56,4 +59,4 @@ function unsafeSwitches(argv, env = process.env, { secondInstance = false, platf
   return options.filter((arg) => looksLikeSwitch(arg, platform) && !allowed(arg, testMode, secondInstance));
 }
 
-module.exports = { unsafeSwitches, looksLikeSwitch, testHeadless };
+module.exports = { unsafeSwitches, looksLikeSwitch, testHeadless, testTraceDir };
