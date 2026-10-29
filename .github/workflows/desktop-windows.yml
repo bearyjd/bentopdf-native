@@ -18,7 +18,7 @@ name: desktop-windows
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, feat/m5-windows-on-main] # TEMPORARY: feat/m5-windows-on-main for verification, removed in the final commit
     paths:
       - 'desktop/**'
       - 'packaging/**'
@@ -58,6 +58,15 @@ jobs:
       - name: Lint shell scripts
         run: shellcheck -S warning scripts/*.sh packaging/*.sh packaging/*/*.sh packaging/linux/AppRun packaging/flatpak/launcher.sh.in
 
+      - name: Linux-runnable gate tests (policy mutations red/green, portable exit-code policy)
+        working-directory: desktop
+        run: |
+          npm ci --ignore-scripts
+          cd ..
+          bash packaging/windows/test-portable-second-step.sh
+          bash packaging/test-asar-policy-mutations.sh
+          (cd desktop && node --test test/portable-outcome.test.js)
+
       - name: Build the offline bundle
         run: |
           bash scripts/build-local.sh
@@ -76,6 +85,9 @@ jobs:
     needs: bundle
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      # Secrets are only handed to the signing build step, and only for main pushes and tags.
+      SIGNING_ALLOWED: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') }}
     steps:
       - name: Keep line endings as committed (the shell scripts must stay LF)
         run: git config --global core.autocrlf false
@@ -117,17 +129,23 @@ jobs:
           npm ci
 
       # Blocking: the outcome is enforced by the "Enforce unit test result" step at the end, so the later
-      # steps (build, smoke) still run and report even when this one fails. POSIX-only tests are skipped
-      # inside the test files with a stated reason, never hidden here.
-      - name: Remaining desktop unit tests (blocking)
+      # steps (build, smoke) still run and report even when this one fails. EVERY test/*.test.js runs here except
+      # the explicit EXCLUDE list (tests that drive a Linux Electron/Xvfb or the Linux packaging); a new test
+      # therefore runs on Windows by default. A test that cannot run on win32 skips itself with a stated reason
+      # (node:test skip), it is never hidden here.
+      - name: Desktop unit tests (blocking, all test/*.test.js except the Linux-Electron ones)
         id: unit
         continue-on-error: true
         working-directory: desktop
-        run: >-
-          node --test --test-concurrency=1 test/open-file.test.js test/argv-policy.test.js test/normalise-modes.test.js
-          test/ipc.test.js test/security.test.js test/static-files.test.js test/transport-http.test.js test/test-mode.test.js
-          test/shell-hardening.test.js test/shell-ipc.test.js test/shell-menu.test.js test/shell-open-document.test.js
-          test/shell-registry.test.js test/shell-store.test.js test/shell-tabs.test.js
+        run: |
+          exclude=" e2e.test.js main-entry.test.js shell-e2e.test.js csp-smoke.test.js "
+          files=()
+          for f in test/*.test.js; do
+            case "$exclude" in *" ${f##*/} "*) echo "excluded (needs Linux Electron): $f"; continue ;; esac
+            files+=("$f")
+          done
+          echo "running ${#files[@]} test files"
+          node --test --test-concurrency=1 "${files[@]}"
 
       - name: Mutation test of the NOTICE check
         run: bash packaging/test-check-notice.sh
@@ -146,10 +164,24 @@ jobs:
             echo "### NOT FOR RELEASE: NOTICE has $count unresolved lines" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Optional code signing (only when the repository secrets exist)
+      # SIGNING. Secrets are passed ONLY as `env:` of the one build step below, never through $GITHUB_ENV, so
+      # no later step inherits them and a newline in a secret value cannot inject variables. Signing is allowed
+      # only for pushes to main and v* tags (never workflow_dispatch from another branch, never the temporary
+      # branch trigger): the unsigned step runs everywhere else and has no secret in its environment. With the
+      # secrets absent the signing step is inert (empty values are unset, electron-builder sees no configuration).
+      # Before adding ANY secret the repository owner must create a GitHub Environment restricted to main and v*
+      # tags (docs/desktop-windows.md, "Signing"); this workflow does not name an environment on purpose.
+      - name: Build packages (NSIS installer and portable exe, unsigned)
+        if: ${{ env.SIGNING_ALLOWED != 'true' }}
+        run: |
+          echo "### Signing mode: none (not a main push or v* tag)" >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/package-windows.sh
+
+      - name: Build packages (NSIS installer and portable exe, signed when secrets exist)
+        if: ${{ env.SIGNING_ALLOWED == 'true' }}
         env:
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGN_ENDPOINT }}
           AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
           AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
@@ -158,25 +190,19 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
-          # An empty variable is never exported: electron-builder then sees no signing configuration at all.
+          # An empty variable is unset: electron-builder then sees no signing configuration at all.
+          for v in CSC_LINK CSC_KEY_PASSWORD AZURE_SIGN_ENDPOINT AZURE_SIGN_ACCOUNT AZURE_SIGN_PROFILE AZURE_SIGN_PUBLISHER AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+            [ -n "${!v:-}" ] || unset "$v"
+          done
           signing=none
-          if [ -n "$WIN_CSC_LINK" ]; then
-            echo "::add-mask::$WIN_CSC_LINK"
-            echo "CSC_LINK=$WIN_CSC_LINK" >> "$GITHUB_ENV"
-            [ -z "$WIN_CSC_KEY_PASSWORD" ] || { echo "::add-mask::$WIN_CSC_KEY_PASSWORD"; echo "CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD" >> "$GITHUB_ENV"; }
+          if [ -n "${CSC_LINK:-}" ]; then
             signing=certificate
-          elif [ -n "$AZURE_SIGN_ENDPOINT" ] && [ -n "$AZURE_SIGN_ACCOUNT" ] && [ -n "$AZURE_SIGN_PROFILE" ] && [ -n "$AZURE_SIGN_PUBLISHER" ]; then
-            for v in AZURE_SIGN_ENDPOINT AZURE_SIGN_ACCOUNT AZURE_SIGN_PROFILE AZURE_SIGN_PUBLISHER AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
-              [ -z "${!v}" ] || echo "$v=${!v}" >> "$GITHUB_ENV"
-            done
-            [ -z "$AZURE_CLIENT_SECRET" ] || echo "::add-mask::$AZURE_CLIENT_SECRET"
+          elif [ -n "${AZURE_SIGN_ENDPOINT:-}" ] && [ -n "${AZURE_SIGN_ACCOUNT:-}" ] && [ -n "${AZURE_SIGN_PROFILE:-}" ] && [ -n "${AZURE_SIGN_PUBLISHER:-}" ]; then
             signing=azure
           fi
           echo "signing mode: $signing"
           echo "### Signing mode: $signing" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build packages (NSIS installer and portable exe)
-        run: bash scripts/package-windows.sh
+          bash scripts/package-windows.sh
 
       - name: Checksums
         working-directory: desktop/release
@@ -232,33 +258,20 @@ jobs:
           bash packaging/windows/smoke-installer.sh "$(ls desktop/release/*-setup-*.exe)" "$(ls desktop/release/*-portable-*.exe)" "${flags[@]}"
 
       # KNOWN FAILURE (issue #11): the portable exe's second instance does not forward its file, and the portable
-      # cannot enter test mode (its stub wipes the extraction directory, so no marker can be placed). Its own step,
-      # non-blocking, so it neither hides other portable failures (those are in the blocking step above) nor
-      # turns CI red; the summary step below lists its outcome loudly. The installed second-instance checks
-      # stay BLOCKING (smoke step above).
-      - name: Portable second-instance (KNOWN FAILURE, issue #11)
-        id: portable_second
+      # cannot enter test mode (its stub wipes the extraction directory, so no marker can be placed). The smoke
+      # script exits 3 ONLY for that signature (first instance healthy, second launch hung or forwarding
+      # unobservable); portable-second-step.sh turns 3 into a loud 'KNOWN FAILURE #11' summary line and a green
+      # step, and EVERYTHING else (crash, missing exe, any other exit code, a timeout elsewhere) into a red step.
+      # The installed second-instance checks stay BLOCKING in the smoke step above.
+      - name: Portable second-instance (issue #11: exit 3 = known, anything else = red)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         timeout-minutes: 15
-        run: bash packaging/windows/smoke-installer.sh --portable-second-instance "$(ls desktop/release/*-portable-*.exe)"
+        run: bash packaging/windows/portable-second-step.sh bash packaging/windows/smoke-installer.sh --portable-second-instance "$(ls desktop/release/*-portable-*.exe)"
 
-      - name: Lint and Windows-relevant unit tests (run on a real Windows host)
+      - name: Lint
         if: ${{ !cancelled() }}
         working-directory: desktop
-        run: |
-          npm run lint
-          node --test --test-concurrency=1 test/windows.test.js test/brand.test.js test/headers.test.js
-
-      - name: Known failures (listed, never counted as passed)
-        if: ${{ always() }}
-        env:
-          OUTCOME: ${{ steps.portable_second.outcome }}
-        run: |
-          line="KNOWN FAILURE (issue #11, non-blocking): Portable second-instance -- step outcome: ${OUTCOME:-not run}. NOT VERIFIED on this run."
-          [ "$OUTCOME" != success ] || line="Portable second-instance (issue #11) PASSED on this run: review and close the issue, then make the step blocking."
-          echo "::warning::$line"
-          echo "## $line" >> "$GITHUB_STEP_SUMMARY"
+        run: npm run lint
 
       - name: Enforce unit test result
         if: ${{ !cancelled() }}
