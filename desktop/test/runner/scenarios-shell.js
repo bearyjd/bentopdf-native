@@ -210,6 +210,12 @@ async function shellIpcReject(ctx) {
     views.push(c);
     out.toolIpcFromShellOrigin = await js(c.webContents, `window.bentoDesktop.openFile().then(() => 'ALLOWED', (e) => e.message)`);
     out.toolReadFromShellOrigin = await js(c.webContents, `window.bentoDesktop.takeOpenedFiles().then(() => 'ALLOWED', (e) => e.message)`);
+    // A WebContents in the default session (no partition): its session is still locked,
+    // so even a data: document is cancelled (Electron would load it without the lock).
+    const d = new WebContentsView({ webPreferences: secureWebPreferences(undefined) });
+    views.push(d);
+    out.defaultSessionLoad = await d.webContents.loadURL('data:text/html,<title>x</title>').then(() => 'LOADED', (e) => e.code || e.message);
+    out.defaultSessionBlocked = handle.blocked.some((b) => b.partition === 'default');
   } finally {
     for (const v of views) v.webContents.close();
   }
@@ -220,6 +226,7 @@ async function shellIpcReject(ctx) {
   for (const key of ['shellIpcFromToolOrigin', 'shellIpcFromSecondShellPage', 'toolIpcFromShellOrigin', 'toolReadFromShellOrigin']) {
     if (!refused(out[key])) bad.push(`${key}: ${out[key]}`);
   }
+  if (out.defaultSessionLoad !== 'ERR_BLOCKED_BY_CLIENT' || !out.defaultSessionBlocked) bad.push('default session not locked');
   if (bad.length) throw new Error(`${bad.join(' | ')} :: ${JSON.stringify(out)}`);
   return out;
 }

@@ -6,7 +6,7 @@ const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
 const { buildAppHeaders } = require('../headers');
 const { installFailureHandlers } = require('../failure');
 const { registerIpc } = require('../ipc');
-const { lockWebContents, secureWebPreferences } = require('../security');
+const { lockSession, lockWebContents, secureWebPreferences } = require('../security');
 const { createDocumentStore } = require('./document-store');
 const { createRecents } = require('./recents');
 const { buildToolRegistry } = require('./tool-registry');
@@ -50,27 +50,28 @@ async function startShell(options) {
   const handoffs = [];
   const extraAllowed = new Set();
   const prepared = new WeakSet();
+  const observers = (partition) => ({
+    allowDevtools: !app.isPackaged,
+    extraAllowed,
+    onBlocked: (url) => {
+      blocked.push({ partition, url });
+      log(`blocked request (${partition}): ${url}`);
+    },
+    onPermission: (decision) => {
+      permissionDecisions.push({ ...decision, partition });
+      log(`permission ${decision.kind} ${decision.permission} (${partition}): ${decision.granted ? 'GRANTED' : 'denied'}`);
+    },
+  });
   const prepare = (ses, partition, { host = 'app', root = rootReal, hdrs = headers } = {}) => {
-    const origin = prepareSession(ses, {
-      prepared,
-      rootReal: root,
-      headers: hdrs,
-      host,
-      allowDevtools: !app.isPackaged,
-      extraAllowed,
-      onBlocked: (url) => {
-        blocked.push({ partition, url });
-        log(`blocked request (${partition}): ${url}`);
-      },
-      onPermission: (decision) => {
-        permissionDecisions.push({ ...decision, partition });
-        log(`permission ${decision.kind} ${decision.permission} (${partition}): ${decision.granted ? 'GRANTED' : 'denied'}`);
-      },
-    });
+    const origin = prepareSession(ses, { prepared, rootReal: root, headers: hdrs, host, ...observers(partition) });
     onSession(ses, partition);
     return origin;
   };
 
+  // Nothing of the shell loads in the default session, but anything that ever did must
+  // still be locked (deny permissions, cancel non-app requests), as in the M2 app.
+  const defaultObservers = observers('default');
+  lockSession(session.defaultSession, APP_ORIGIN, defaultObservers.onBlocked, defaultObservers);
   const shellOrigin = prepare(session.fromPartition(SHELL_PARTITION), SHELL_PARTITION, { host: SHELL_HOST, root: fs.realpathSync(UI_DIR), hdrs: SHELL_HEADERS });
   let win = null;
   let shellId = null;
