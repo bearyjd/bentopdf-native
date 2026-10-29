@@ -114,12 +114,6 @@ jobs:
           echo "ELECTRON_CACHE=$ELECTRON_CACHE" >> "$GITHUB_ENV"
           npm ci
 
-      - name: Lint and Windows-relevant unit tests (run on a real Windows host)
-        working-directory: desktop
-        run: |
-          npm run lint
-          node --test --test-concurrency=1 test/windows.test.js test/brand.test.js test/headers.test.js
-
       - name: Remaining desktop unit tests (informational, several are POSIX-oriented)
         continue-on-error: true
         working-directory: desktop
@@ -225,3 +219,10 @@ jobs:
           flags=()
           [ "$IS_TAG" = true ] && flags+=(--release)
           bash packaging/windows/smoke-installer.sh "$(ls desktop/release/*-setup-*.exe)" "$(ls desktop/release/*-portable-*.exe)" "${flags[@]}"
+
+      - name: Lint and Windows-relevant unit tests (run on a real Windows host)
+        if: ${{ !cancelled() }}
+        working-directory: desktop
+        run: |
+          npm run lint
+          node --test --test-concurrency=1 test/windows.test.js test/brand.test.js test/headers.test.js

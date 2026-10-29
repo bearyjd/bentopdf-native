@@ -93,7 +93,7 @@ test('static files: host-config names are hidden whatever their case (NTFS is ca
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bento-win-static-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'bento-win-static-')));
   try {
     fs.writeFileSync(path.join(root, '_Headers'), 'secret');
     fs.writeFileSync(path.join(root, 'index.html'), 'ok');
