@@ -20,7 +20,8 @@ else
 fi
 
 ELECTRON_VERSION="$(tr -d '[:space:]' < "$ELECTRON_DIST/version")"
-ELECTRON_BIN_SHA="$(sha256sum "$ELECTRON_BIN" | cut -d' ' -f1)"
+# Hash from stdin: given a path with backslashes (Windows), sha256sum prefixes the digest with "\".
+ELECTRON_BIN_SHA="$(sha256sum < "$ELECTRON_BIN" | cut -d' ' -f1)"
 ELECTRON_ZIP=""
 for cache in "${ELECTRON_CACHE:-}" "$HOME/.cache/electron" "${LOCALAPPDATA:-}/electron/Cache"; do
   [ -n "$cache" ] && [ -d "$cache" ] || continue
@@ -28,7 +29,7 @@ for cache in "${ELECTRON_CACHE:-}" "$HOME/.cache/electron" "${LOCALAPPDATA:-}/el
   [ -z "$ELECTRON_ZIP" ] || break
 done
 if [ -n "$ELECTRON_ZIP" ]; then
-  ELECTRON_ZIP_SHA="$(sha256sum "$ELECTRON_ZIP" | cut -d' ' -f1)"
+  ELECTRON_ZIP_SHA="$(sha256sum < "$ELECTRON_ZIP" | cut -d' ' -f1)"
 else
   ELECTRON_ZIP_SHA="not found in the electron download cache (binary hash above still applies)"
 fi

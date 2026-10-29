@@ -23,7 +23,8 @@ native() { cygpath -m "$1"; }
 
 PRODUCT="$(node -p "require(process.argv[1]).productName" "$(native "$ROOT/desktop/brand.json")")"
 APP_ID="$(node -p "require(process.argv[1]).appId" "$(native "$ROOT/desktop/brand.json")")"
-TMPROOT="$(mktemp -d)"
+# Under RUNNER_TEMP when set: its path has no 8.3 short names, which the installer-written shortcut targets would not match.
+if [ -n "${RUNNER_TEMP:-}" ]; then TMPROOT="$(mktemp -d -p "$(cygpath -u "$RUNNER_TEMP")")"; else TMPROOT="$(mktemp -d)"; fi
 INSTALL_DIR="$TMPROOT/install dir"
 EXE="$INSTALL_DIR/$PRODUCT.exe"
 UNINSTALLER="$INSTALL_DIR/Uninstall $PRODUCT.exe"
@@ -37,19 +38,24 @@ FAILED=0
 note() { echo "$*"; [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
 check() { # description command...
   local what="$1"; shift
-  if "$@" >/dev/null 2>&1; then note "ok   $what"; else note "FAIL $what"; FAILED=$((FAILED + 1)); fi
+  if "$@" >"$TMPROOT/check.out" 2>&1; then note "ok   $what"; else note "FAIL $what"; sed "s/^/       /" "$TMPROOT/check.out" | tail -8 >&2; FAILED=$((FAILED + 1)); fi
 }
 absent() { ! "$@"; }
 exists() { [ -e "$1" ]; }
 reg_key() { reg query "$1"; }
 reg_value() { reg query "$1" /v "$2"; }
 uninstall_entry() { reg query "$UNINSTALL_ROOT" /s /f "$PRODUCT" /d | grep -q "DisplayName"; }
-pdf_default() { reg query 'HKCU\Software\Classes\.pdf' /ve 2>&1 | tr -d '\r'; }
+pdf_default() { # the DEFAULT value of HKCU\Software\Classes\.pdf ("absent" when the key is missing)
+  powershell.exe -NoProfile -Command "\$k = Get-Item -LiteralPath 'HKCU:\Software\Classes\.pdf' -ErrorAction SilentlyContinue; if (\$k) { '[' + \$k.GetValue('') + ']' } else { 'absent' }" | tr -d '\r'
+}
 lnk_field() { # file field
   powershell.exe -NoProfile -Command "(New-Object -ComObject WScript.Shell).CreateShortcut('$(win "$1")').$2" | tr -d '\r'
 }
 lnk_clean() { # file: target is the installed exe, arguments contain no sandbox/devtools switch
-  [ "$(lnk_field "$1" TargetPath)" = "$(win "$EXE")" ] && ! lnk_field "$1" Arguments | grep -Eq -- '--no-sandbox|--disable|--remote-debugging|--inspect'
+  local target args want
+  target="$(lnk_field "$1" TargetPath)"; args="$(lnk_field "$1" Arguments)"; want="$(win "$EXE")"
+  echo "  shortcut $(basename "$1"): target=[$target] arguments=[$args] expected target=[$want]" >&2
+  [ "${target,,}" = "${want,,}" ] && ! printf '%s' "$args" | grep -Eq -- '--no-sandbox|--disable|--remote-debugging|--inspect'
 }
 command_line_clean() { # the shell\open\command default value runs the installed exe with "%1" only
   reg query "$PROGID_KEY\\shell\\open\\command" /ve | tr -d '\r' | grep -F "$(win "$EXE")" | grep -F '"%1"' | grep -vq -- '--'
@@ -79,7 +85,7 @@ if [ "$(pdf_default)" = "$DEFAULT_BEFORE" ]; then note "ok   the HKCU .pdf defau
 # ---- gate and smoke on the installed tree ---------------------------------------------------------
 check "release gate on the installed tree" bash "$ROOT/packaging/verify-artifact-win.sh" "${GATE_ARGS[@]}" --tree "$INSTALL_DIR" --kind installed
 note "--- packaged smoke (installed app)"
-if node "$ROOT/desktop/test/packaged-smoke-win.js" "$EXE" | tee "$TMPROOT/smoke-installed.log"; then note "ok   packaged smoke (installed)"; else note "FAIL packaged smoke (installed)"; FAILED=$((FAILED + 1)); fi
+if node "$(native "$ROOT/desktop/test/packaged-smoke-win.js")" "$(win "$EXE")" | tee "$TMPROOT/smoke-installed.log"; then note "ok   packaged smoke (installed)"; else note "FAIL packaged smoke (installed)"; FAILED=$((FAILED + 1)); fi
 [ -z "${GITHUB_STEP_SUMMARY:-}" ] || { echo '```'; cat "$TMPROOT/smoke-installed.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
 # ---- uninstall --------------------------------------------------------------------------------------
@@ -100,7 +106,7 @@ PORT_DIR="$TMPROOT/portable"
 mkdir -p "$PORT_DIR"
 cp "$PORTABLE" "$PORT_DIR/portable.exe"
 note "--- packaged smoke (portable exe)"
-if node "$ROOT/desktop/test/packaged-smoke-win.js" "$PORT_DIR/portable.exe" | tee "$TMPROOT/smoke-portable.log"; then note "ok   packaged smoke (portable)"; else note "FAIL packaged smoke (portable)"; FAILED=$((FAILED + 1)); fi
+if node "$(native "$ROOT/desktop/test/packaged-smoke-win.js")" "$(win "$PORT_DIR/portable.exe")" | tee "$TMPROOT/smoke-portable.log"; then note "ok   packaged smoke (portable)"; else note "FAIL packaged smoke (portable)"; FAILED=$((FAILED + 1)); fi
 [ -z "${GITHUB_STEP_SUMMARY:-}" ] || { echo '```'; cat "$TMPROOT/smoke-portable.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 check "portable run left no ProgID key" absent reg_key "$PROGID_KEY"
 check "portable run left no shortcut" absent exists "$DESKTOP_LNK"
