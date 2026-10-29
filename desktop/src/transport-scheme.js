@@ -33,11 +33,15 @@ function toWebBody(body) {
   return Buffer.isBuffer(body) ? body : Readable.toWeb(body);
 }
 
-/** After 'ready'. Returns {origin, close}. */
-function startSchemeTransport({ rootReal, headers }) {
-  protocol.handle(SCHEME, async (request) => {
+/**
+ * After 'ready'. Returns {origin, close}. `target` is the protocol object to
+ * register on (default session's `protocol`, or `session.protocol` of a
+ * partition); `host` is the only host served (`app`, or `shell` for the shell UI).
+ */
+function startSchemeTransport({ rootReal, headers, target = protocol, host = 'app' }) {
+  target.handle(SCHEME, async (request) => {
     const url = new URL(request.url);
-    if (url.host !== 'app') {
+    if (url.host !== host) {
       return new Response('Forbidden', { status: 403, headers });
     }
     const result = await serveStatic({
@@ -52,7 +56,7 @@ function startSchemeTransport({ rootReal, headers }) {
       headers: result.headers,
     });
   });
-  return { origin: ORIGIN, close: () => protocol.unhandle(SCHEME) };
+  return { origin: `${SCHEME}://${host}`, close: () => target.unhandle(SCHEME) };
 }
 
 module.exports = { registerScheme, schemePrivileges, startSchemeTransport, SCHEME, ORIGIN };

@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { CHANNELS } = require('./channels');
-const { validateOpenPath, hasPdfMagic } = require('./open-file');
+const { validateOpenPath, validateLocalFile, hasPdfMagic } = require('./open-file');
 
 const MAX_BYTES = 512 * 1024 * 1024;
 const GRANT_TTL_MS = 10 * 60 * 1000;
@@ -84,8 +84,11 @@ async function readRegularFile(filePath, maxBytes = MAX_BYTES, expect = {}) {
  * module issued after the user picked them in a native dialog for that same
  * WebContents; it never supplies a path. Grants expire (TTL), are capped per
  * window and die with the window. `dialogs` and `now` are injected for tests.
+ * `canUseDialogs(webContents)` decides whether a sender may open a native
+ * dialog (the tabbed shell allows only the ACTIVE tab, so a hidden background
+ * tab cannot pop one up); it defaults to "yes" for the single-window app.
  */
-function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
+function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now, canUseDialogs = () => true }) {
   const grants = new Map(); // webContents.id -> Map(token -> {filePath,name,size,expires,dev,ino,...})
 
   const tableFor = (webContents) => {
@@ -96,19 +99,22 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
     }
     return grants.get(id);
   };
+  const assertMayOpenDialog = (event) => {
+    if (!canUseDialogs(event.sender)) throw new Error('dialogs are only available to the active tab');
+  };
   const grantsFor = (event) => tableFor(event.sender);
 
-  const issue = (table, filePath, size, identity = {}) => {
+  const issue = (table, filePath, size, identity = {}, name = path.basename(filePath)) => {
     for (const [token, grant] of table) if (grant.expires <= now()) table.delete(token);
     while (table.size >= MAX_GRANTS_PER_WINDOW) table.delete(table.keys().next().value);
     const token = crypto.randomUUID();
-    const name = path.basename(filePath);
     table.set(token, { filePath, name, size, expires: now() + GRANT_TTL_MS, ...identity });
     return { token, name, size };
   };
 
   ipcMain.handle(CHANNELS.openFile, async (event, raw) => {
     assertTrusted(event, origin);
+    assertMayOpenDialog(event);
     const { multiple, extensions } = parseOpenOptions(raw);
     const picked = await dialogs.showOpenDialog(getWindow(), {
       properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
@@ -118,8 +124,12 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
     const table = grantsFor(event);
     const result = [];
     for (const filePath of picked.filePaths) {
-      const stat = await fs.promises.stat(filePath);
-      if (stat.isFile()) result.push(issue(table, filePath, stat.size, { dev: stat.dev, ino: stat.ino }));
+      // The user may have switched tabs while the dialog was open: only the active tab gets a grant.
+      if (!canUseDialogs(event.sender)) throw new Error('the tab is no longer active; no file was opened');
+      const checked = await validateLocalFile(filePath, MAX_BYTES); // same validator as every other path; a refusal rejects the call
+      // The awaits above are another chance to lose the active tab.
+      if (!canUseDialogs(event.sender)) throw new Error('the tab is no longer active; no file was opened');
+      result.push(issue(table, checked.filePath, checked.size, { dev: checked.dev, ino: checked.ino, nofollow: true }, path.basename(filePath)));
     }
     return result;
   });
@@ -133,11 +143,13 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
       table.delete(token);
       throw new Error('file token expired');
     }
+    if (grant.bytes) return grant.bytes;
     return readRegularFile(grant.filePath, MAX_BYTES, grant);
   });
 
   ipcMain.handle(CHANNELS.saveFile, async (event, rawName, bytes) => {
     assertTrusted(event, origin);
+    assertMayOpenDialog(event);
     if (!(bytes instanceof Uint8Array)) throw new Error('bytes must be a Uint8Array');
     if (bytes.byteLength > MAX_BYTES) throw new Error('data too large');
     const suggested = safeFileName(rawName);
@@ -180,9 +192,25 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
    * Main-process-initiated grant for a path that came from the OS, never from
    * the renderer. Same checks as the dialog path (.pdf, regular file, size cap).
    */
-  const openPath = async (webContents, filePath) => {
+  /**
+   * Main-process grant of a path for one WebContents, without pushing it to the
+   * page (the shell's document handoff). Same checks as openPath; `expect`
+   * ({dev, ino}, from the document store) must still match the file.
+   */
+  const grantPath = async (webContents, filePath, expect = {}) => {
     const { size, filePath: resolved, dev, ino } = await validateOpenPath(filePath, MAX_BYTES);
-    const entry = issue(tableFor(webContents), resolved, size, { dev, ino, nofollow: true, pdf: true });
+    if (expect.ino !== undefined && (expect.ino !== ino || expect.dev !== dev)) throw new Error('file changed since it was opened');
+    return issue(tableFor(webContents), resolved, size, { dev, ino, nofollow: true, pdf: true });
+  };
+
+  /** Grant for an in-memory PDF (bytes held by the main process, never a path). */
+  const grantBytes = (webContents, name, bytes) => {
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_BYTES || !hasPdfMagic(bytes)) throw new Error('not a PDF within the size cap');
+    return issue(tableFor(webContents), safeFileName(name), bytes.byteLength, { bytes });
+  };
+
+  const openPath = async (webContents, filePath) => {
+    const entry = await grantPath(webContents, filePath);
     const state = openedFor(webContents);
     if (state.listening) webContents.send(CHANNELS.fileOpened, entry);
     else state.queue.push(entry);
@@ -192,7 +220,7 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
   const dispose = () => {
     for (const channel of Object.values(CHANNELS)) ipcMain.removeHandler(channel);
   };
-  return Object.assign(dispose, { openPath });
+  return Object.assign(dispose, { openPath, grantPath, grantBytes });
 }
 
 module.exports = {

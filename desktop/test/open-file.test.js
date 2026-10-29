@@ -181,3 +181,15 @@ test('About text states the licence, the no-warranty line and the corresponding-
   assert.ok(text.includes(SOURCE_URL));
   assert.match(text, /Unofficial/);
 });
+
+test('network paths (UNC, //host) are refused on every platform: validateOpenPath and argv', async () => {
+  const { hasNetworkPrefix } = require('../src/open-file');
+  for (const p of ['\\\\host\\share\\a.pdf', '//host/share/a.pdf', '\\\\?\\UNC\\h\\s\\a.pdf', '/\\host/a.pdf', '\\\\.\\pipe\\x.pdf', '//./pipe/x.pdf', '//?/UNC/h/s/a.pdf', '\\\\?\\\\h\\s\\a.pdf', '\\\\?\\Volume{1}\\a.pdf', 'smb://h/s/a.pdf', 'SMB:\\\\h\\s\\a.pdf', 'file://host/share/a.pdf']) {
+    assert.equal(hasNetworkPrefix(p), true, p);
+    await assert.rejects(validateOpenPath(p, 1024), /network paths are not allowed/, p);
+  }
+  for (const p of ['/home/u/a.pdf', 'C:\\docs\\a.pdf', 'a.pdf', '', null, '\\\\?\\C:\\docs\\a.pdf', '//?/c:/docs/a.pdf', 'file:///home/u/a.pdf', 'file://localhost/home/u/a.pdf']) {
+    assert.equal(hasNetworkPrefix(p), false, `legitimate: ${String(p)}`);
+  }
+  assert.deepEqual(pdfPathsFromArgv(['app', '//host/share/a.pdf', '\\\\host\\s\\b.pdf', '\\\\.\\pipe\\x.pdf', 'file://host/share/d.pdf', '/ok/c.pdf'], { cwd: '/' }), ['/ok/c.pdf']);
+});

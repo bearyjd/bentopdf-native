@@ -17,11 +17,15 @@ const { dialog, Menu, shell } = require('electron');
 const { prepare, startApp, TRANSPORTS, log } = require('./app');
 const brand = require('../brand.json');
 const { aboutDetail, buildMenuTemplate, SOURCE_URL } = require('./menu');
+const { startShell } = require('./shell/shell-app');
+const { buildShellMenuTemplate } = require('./shell/shell-menu');
 const { unsafeSwitches } = require('./argv-policy');
 const { pdfPathsFromArgv } = require('./open-file');
+const { DEFAULT_TRANSPORT, startKindFor } = require('./start-mode');
 
-// Decided by experiment, see docs/m2-findings.md.
-const DEFAULT_TRANSPORT = 'scheme';
+// Decided by experiment, see docs/m2-findings.md. The tabbed shell (M3a) needs the
+// scheme. BENTO_TRANSPORT=http is a TEST-ONLY harness (the single-window M2 app on
+// loopback, unpackaged runs only): it is not the product and has no tabs (start-mode.js).
 
 // Dev overrides only: a packaged app must not be redirected by its environment.
 // Packaged, the bundle is an extraResource outside app.asar (docs/desktop-linux.md).
@@ -38,22 +42,33 @@ const die = (what, err) => {
 process.on('uncaughtException', (err) => die('uncaughtException', err));
 process.on('unhandledRejection', (err) => die('unhandledRejection', err));
 
+const showAbout = () =>
+  dialog.showMessageBox({
+    type: 'info',
+    title: `About ${brand.productName}`,
+    message: `${brand.productName} ${app.getVersion()}`,
+    detail: aboutDetail(),
+    buttons: ['OK', 'Open source code'],
+    defaultId: 0,
+    noLink: true,
+  }).then(({ response }) => (response === 1 ? shell.openExternal(SOURCE_URL) : undefined));
+const openSource = () => shell.openExternal(SOURCE_URL);
+
 function installMenu() {
-  const showAbout = () =>
-    dialog.showMessageBox({
-      type: 'info',
-      title: `About ${brand.productName}`,
-      message: `${brand.productName} ${app.getVersion()}`,
-      detail: aboutDetail(),
-      buttons: ['OK', 'Open source code'],
-      defaultId: 0,
-      noLink: true,
-    }).then(({ response }) => (response === 1 ? shell.openExternal(SOURCE_URL) : undefined));
-  const openSource = () => shell.openExternal(SOURCE_URL);
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ showAbout, openSource, devtools: !app.isPackaged })));
 }
 
-const refused = unsafeSwitches(process.argv);
+/** Rebuilt when the recent-files list changes (Open Recent submenu). */
+let menuRecents = null;
+function installShellMenu(menuActions, recents) {
+  const key = JSON.stringify(recents);
+  if (key === menuRecents) return;
+  menuRecents = key;
+  const template = buildShellMenuTemplate({ ...menuActions, showAbout, openSource }, { recents, devtools: !app.isPackaged });
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+const refused = unsafeSwitches(process.argv, overrides, { packaged: app.isPackaged });
 if (refused.length > 0) {
   process.stderr.write(`[bento] refusing to start with unsafe switch(es): ${refused.join(' ')}\n`);
   app.exit(2);
@@ -79,7 +94,7 @@ if (refused.length > 0) {
   };
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
-    const unsafe = unsafeSwitches(argv, undefined, { secondInstance: true });
+    const unsafe = unsafeSwitches(argv, overrides, { secondInstance: true, packaged: app.isPackaged });
     if (unsafe.length > 0) {
       log(`ignored a second launch with unsafe switch(es): ${unsafe.join(' ')}`);
       return;
@@ -102,8 +117,18 @@ if (refused.length > 0) {
   app
     .whenReady()
     .then(async () => {
-      installMenu();
-      handle = await startApp({ distDir, transport });
+      if (startKindFor(transport) === 'shell') {
+        let menuActions = null;
+        const onStateChanged = (state) => menuActions && installShellMenu(menuActions, state.recents);
+        const started = await startShell({ distDir, homeTab: waiting.length === 0, onStateChanged });
+        menuActions = started.menuActions;
+        installShellMenu(menuActions, started.recents.list());
+        handle = started;
+      } else {
+        log('BENTO_TRANSPORT=http: TEST-ONLY single-window harness, not the tabbed shell');
+        installMenu();
+        handle = await startApp({ distDir, transport });
+      }
       openPaths(waiting.splice(0));
     })
     .catch((err) => die('Failed to start', err));

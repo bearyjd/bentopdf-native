@@ -55,3 +55,24 @@ test('unsafeSwitches: a bare -- ends the options; refused switches before it sti
 test('open-with still accepts only file arguments and file:// URLs next to refused switches', () => {
   assert.deepEqual(pdfPathsFromArgv(['exe', '--no-sandbox', 'https://x.example/a.pdf', '/d/a.pdf'], { cwd: '/' }), ['/d/a.pdf']);
 });
+
+test('unsafeSwitches: a packaged build refuses the test switches even with BENTO_TEST_HEADLESS=1', () => {
+  for (const arg of ['--ozone-platform=headless', '--remote-debugging-port=0', '--remote-debugging-pipe', '--user-data-dir=/tmp/p']) {
+    assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, { packaged: true }), [arg], arg);
+    assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, { packaged: true, secondInstance: true }), [arg], `${arg} (second instance)`);
+    assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, { packaged: false }), [], `${arg} unpackaged`);
+  }
+  assert.deepEqual(unsafeSwitches(['exe', '--remote-debugging-port=0']), ['--remote-debugging-port=0'], 'no env argument: closed');
+});
+
+test('main.js feeds the policy the app.isPackaged-gated environment, and both launchers unset the test variables', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  assert.match(main, /unsafeSwitches\(process\.argv, overrides, \{ packaged: app\.isPackaged \}\)/);
+  assert.match(main, /unsafeSwitches\(argv, overrides, \{ secondInstance: true, packaged: app\.isPackaged \}\)/);
+  for (const launcher of ['linux/AppRun', 'flatpak/launcher.sh.in']) {
+    const unset = fs.readFileSync(path.join(__dirname, '..', '..', 'packaging', launcher), 'utf8').split('\n').find((l) => l.startsWith('unset '));
+    for (const v of ['BENTO_TEST_HEADLESS', 'BENTO_DIST', 'BENTO_TRANSPORT']) assert.match(unset, new RegExp(`\\b${v}\\b`), `${launcher} unsets ${v}`);
+  }
+});

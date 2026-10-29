@@ -15,12 +15,12 @@ let tmp;
 before(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bento-ipc-')); });
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-function harness({ dialogs, now } = {}) {
+function harness({ dialogs, now, canUseDialogs } = {}) {
   const handlers = new Map();
   const ipcMain = { handle: (c, f) => handlers.set(c, f), removeHandler: (c) => handlers.delete(c) };
   const sender = Object.assign(new EventEmitter(), { id: 1 });
   const event = { sender, senderFrame: { url: `${ORIGIN}/index.html`, parent: null } };
-  const dispose = registerIpc({ ipcMain, origin: ORIGIN, dialogs, getWindow: () => null, now });
+  const dispose = registerIpc({ ipcMain, origin: ORIGIN, dialogs, getWindow: () => null, now, canUseDialogs });
   const call = (channel, ...args) => handlers.get(channel)(event, ...args);
   return { call, sender, dispose, handlers };
 }
@@ -104,4 +104,65 @@ test('save allowlist has no executable or script types', () => {
   for (const ext of ['exe', 'sh', 'bat', 'js', 'desktop', 'app', 'jar', 'py', 'lnk']) {
     assert.ok(!SAVE_EXTENSIONS.includes(ext), ext);
   }
+});
+
+test('grantPath: shell handoff grant is per WebContents, validated, and identity-checked', async () => {
+  const h = harness();
+  const pdf = file('handoff.pdf', '%PDF-1.4\nbody');
+  const entry = await h.dispose.grantPath(h.sender, pdf);
+  assert.equal(Buffer.from(await h.call(CHANNELS.readFile, entry.token)).toString().slice(0, 5), '%PDF-');
+  const { ino, dev } = fs.statSync(pdf);
+  await h.dispose.grantPath(h.sender, pdf, { ino, dev });
+  await assert.rejects(h.dispose.grantPath(h.sender, pdf, { ino: ino + 1, dev }), /changed since it was opened/);
+  await assert.rejects(h.dispose.grantPath(h.sender, file('nope.pdf', 'plain text')), /not a PDF/);
+  await assert.rejects(h.dispose.grantPath(h.sender, file('x.txt', '%PDF-')), /not a .pdf/);
+  const other = Object.assign(new EventEmitter(), { id: 2 });
+  const foreign = await h.dispose.grantPath(other, pdf);
+  await assert.rejects(h.call(CHANNELS.readFile, foreign.token), /unknown file token/, 'a grant for another view is not readable here');
+});
+
+test('grantBytes: in-memory PDFs only, read back without touching disk', async () => {
+  const h = harness();
+  const bytes = new Uint8Array(Buffer.from('%PDF-1.7\nmem'));
+  const entry = h.dispose.grantBytes(h.sender, '../evil/mem.pdf', bytes);
+  assert.equal(entry.name, 'mem.pdf');
+  assert.equal(await h.call(CHANNELS.readFile, entry.token), bytes);
+  assert.throws(() => h.dispose.grantBytes(h.sender, 'a.pdf', new Uint8Array(3)), /not a PDF/);
+  assert.throws(() => h.dispose.grantBytes(h.sender, 'a.pdf', 'string'), /not a PDF/);
+});
+
+test('dialog-selected paths go through the shared validator: network paths, directories and FIFOs are refused', async () => {
+  for (const p of ['\\\\host\\share\\a.pdf', '//host/share/a.pdf', '\\\\.\\pipe\\x', '\\\\?\\UNC\\h\\s\\a.pdf', 'smb://h/s/a.pdf']) {
+    const h = harness({ dialogs: picking([p]) });
+    await assert.rejects(h.call(CHANNELS.openFile, {}), /network paths are not allowed/, p);
+  }
+  const fifo = path.join(tmp, 'dialog-pipe');
+  execFileSync('mkfifo', [fifo]);
+  await assert.rejects(harness({ dialogs: picking([fifo]) }).call(CHANNELS.openFile, {}), /not a regular file/);
+  await assert.rejects(harness({ dialogs: picking([tmp]) }).call(CHANNELS.openFile, {}), /not a regular file/);
+  await assert.rejects(harness({ dialogs: picking(['relative.txt']) }).call(CHANNELS.openFile, {}));
+  await assert.rejects(harness({ dialogs: picking(['/x\0y']) }).call(CHANNELS.openFile, {}), /not a usable path/);
+});
+
+test('a dialog pick of a symlink is granted by the picked name but reads the resolved regular file', async () => {
+  const target = file('real-target.txt', 'linked');
+  const link = path.join(tmp, 'picked-link.txt');
+  fs.symlinkSync(target, link);
+  const h = harness({ dialogs: picking([link]) });
+  const [picked] = await h.call(CHANNELS.openFile, {});
+  assert.equal(picked.name, 'picked-link.txt');
+  assert.equal(Buffer.from(await h.call(CHANNELS.readFile, picked.token)).toString(), 'linked');
+});
+
+test('a tab that stopped being the active one while the dialog was open gets no grant', async () => {
+  let active = true;
+  const p = file('late.txt', 'x');
+  const h = harness({
+    dialogs: { showOpenDialog: async () => { active = false; return { canceled: false, filePaths: [p] }; } },
+    canUseDialogs: () => active,
+  });
+  await assert.rejects(h.call(CHANNELS.openFile, {}), /no longer active/);
+  active = true;
+  const none = harness({ dialogs: picking([p]), canUseDialogs: () => true });
+  assert.equal((await none.call(CHANNELS.openFile, {})).length, 1, 'an active tab still gets its grant');
 });

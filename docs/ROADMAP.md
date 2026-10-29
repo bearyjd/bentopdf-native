@@ -62,7 +62,7 @@ operates on the document in the active tab. Fully offline.
 |---|---|---|
 | M1 | Local-bundle build: pinned upstream + patches, all WASM/Tesseract/fonts same-origin, Simple Mode, no non-essential network, Hyper Compress/Kura excluded. Default upstream build and tests still pass. Size report. | local build + test run + grep for external URLs |
 | M2 | Thin Electron shell: transport chosen by experiment (privileged scheme vs loopback), COOP/COEP, `crossOriginIsolated`, workers, LibreOffice WASM, `sw.js`; document handoff proven. | local (needs display; xvfb absent: use headless Electron flags) |
-| M3 | Acrobat shell: tabs, viewer, sidebar mapped to tool categories, recents, native menus/shortcuts/print/dialogs, file association, gap analysis vs Acrobat Pro. | local |
+| M3 | Acrobat shell: tabs, viewer, sidebar mapped to tool categories, recents, native menus/shortcuts/print/dialogs, file association, gap analysis vs Acrobat Pro. First slice M3a done (see "M3 status"); viewer, print, adapters beyond Merge PDF open. | local, headless only so far |
 | M4 | Packaging: AppImage/.deb/Flatpak (local), DMG universal + NSIS/portable (CI only), optional notarization env vars. 100+ MB PDF and multi-page OCR memory report. | Linux local; macOS/Windows CI-built, NOT verified locally |
 | M5 | PWA hardening: icons, precache, header configs, SW COOP/COEP fallback. Small; desktop is primary. | local |
 | M6 | Android (Capacitor): COOP/COEP via shouldInterceptRequest, save/share, minimal permissions, F-Droid metadata. Needs Android SDK (ANDROID_HOME unset here). | build local if SDK installable; device tests may be unverifiable |
@@ -85,6 +85,158 @@ Signing keys/certs are never committed; env vars or CI secrets only.
 - **Cap live views and memory.** One LibreOffice run is about 1.7 GiB RSS
   (docs/m2-findings.md); N tabs cannot each keep a live engine. Define a limit
   and an eviction policy.
+
+## M3 status (first slice "M3a", details in [shell.md](shell.md))
+
+`[x]` = implemented and covered by a passing test on the dev host (headless,
+Electron 45.1.0); `[~]` = PARTIAL; `[ ]` = not done. Nothing here was seen in a visible window.
+
+- [x] Tabs: one `WebContentsView` per tab in one window, each in its own
+  in-memory partition (`bento-tab-<id>`) with the full default-session
+  treatment (scheme handler + COOP/COEP/CORP + CSP, permission lock, non-app
+  requests cancelled). Per tab: `crossOriginIsolated`, the M2 bridge, the
+  permission lock and storage isolation (tab/tab and tab/shell) are e2e-tested.
+- [x] Live-view limit: a weighted slot budget (default 6; ordinary tool 1, OCR 2,
+  LibreOffice conversion 4, from the M2 RSS numbers, constants in
+  `live-budget.js`; which tool is heavy is read from the bundle's HTML, unknown
+  ids weigh 4, and a page navigating itself to a heavy tool re-triggers the discard) with discard and reload-on-activation that re-hands the
+  document (policy unit-tested; discard/reload and the lockdown after reload
+  e2e-tested). The weights are estimates, not a measurement of a running shell.
+- [x] Main-process document store (validated paths only, ids to renderers;
+  released when the last tab closes, LRU eviction of unshown documents; the old
+  hard 32-documents-per-run limit is gone) and shell IPC gated to the
+  registered shell WebContents, with hostile-input tests. Network (UNC) paths
+  refused; native dialogs only for the active tab; main-process accumulators
+  bounded.
+- [x] Tool sidebar derived from `dist` (129 pages, 118 categorised: upstream's
+  categories, not Acrobat's), search, recent files (10, re-validated on open;
+  only a confirmed missing/invalid file is dropped).
+- [~] PARTIAL: handoff adapter = a selector table feeding the M2
+  `handoffToInput`, Merge PDF verified only, no return path. Runs in the
+  background with a visible status and surfaced errors.
+- [x] Menus: File (Open, Open Recent, Close Tab, Quit), Tab (Next/Previous,
+  Ctrl+Tab), View (Reload Tool, zoom), Help (About + AGPL source offer).
+  Template unit-tested; never clicked.
+- [ ] A PDF viewer of our own (a document tab shows upstream's landing page).
+- [ ] Tool results back into the store (output still leaves via the page's own
+  download; "documents by id in and out" from the design notes is not built).
+- [ ] Adapters verified for tools other than Merge PDF.
+- [ ] Print, drag and drop onto the window, native save-as from the shell.
+- [ ] Categories mapped to Acrobat-style task groups (upstream's sections used).
+- [ ] Persisted per-tab settings (partitions are in-memory: upstream settings in
+  `localStorage` do not survive a tab or a restart; issue-ready note in
+  [shell.md](shell.md) TODO).
+
+Mutation checks (each mutation applied alone, then reverted; it must make a
+test fail):
+
+| Mutation | Result |
+|---|---|
+| Shell IPC sender: drop the WebContents id check | RED: shell-ipc unit + e2e shellIpcReject |
+| Shell IPC sender: drop the origin check | RED: shell-ipc unit |
+| Tab partition: skip `lockSession` | RED: e2e shellTabs |
+| Tab partition: skip the whole setup before the view is created | RED: e2e shellTabs |
+| All tabs share one partition | RED: e2e shellTabs |
+| `openTool`: document id not checked against the store | RED: shell-ipc unit |
+| Recents: hostile entries kept | RED: shell-store unit |
+| Handoff grant: file identity (`dev`/`ino`) not compared | RED: ipc unit |
+| Live-view limit ignored | RED: shell-tabs unit + e2e shellMemcap |
+| Registry: excluded pages listed | RED: shell-registry unit |
+| Store: path not validated | RED: shell-store unit |
+| Default session left unlocked in shell mode | RED: e2e shellIpcReject |
+
+Review round (applied on a copy of the worktree under a mktemp dir, one at a
+time, each reverted; "RED" = the named test failed, baseline green):
+
+| Mutation | Result |
+|---|---|
+| tab-manager `close()` does not discard the view | RED: shell-tabs unit |
+| Handoff uses the wrong document id (first in the store) | RED: e2e shellHandoff (two documents open) |
+| Stale-view guard in `loadInto` removed | RED: shell-tabs unit |
+| Previous view not hidden on activate | RED: shell-tabs unit |
+| `navigate` drops the document id | RED: shell-tabs unit |
+| Store dedupes by path only (no dev/ino) | RED: shell-store unit |
+| `store.touch` removed from the handoff | RED: e2e shellHandoff |
+| Handoff awaited by activate/open (blocks) | RED: shell-tabs unit |
+| Weights ignored by the live-view policy | RED: shell-tabs unit |
+| Document not released when its tab closes | RED: e2e shellLifecycle |
+| Window teardown skips `closeAll` / skips `views.dispose` | RED: e2e shellTeardown (both) |
+| Native-dialog active-tab gate removed | RED: shell-hardening unit + e2e shellIpcReject |
+| Closed tab's session not emptied | RED: e2e shellLifecycle |
+| Handoff error not surfaced to the status | RED: e2e shellHandoffError |
+| Window title taken from the page | RED: e2e shellLifecycle |
+| Per-path serialisation of concurrent opens removed | **GREEN (survived)**: the store and tab lookup run synchronously after the await, so duplicates cannot occur even without it; the helper is unit-tested (`serialByKey`) but its wiring is defence in depth with no test that can fail |
+
+Final fix round (each mutation applied alone to the worktree files, then restored; baseline green):
+
+| Mutation | Result |
+|---|---|
+| Handoff: epoch compare and page re-check both removed | RED: e2e shellHandoffNavigated (file injected into Split PDF, success recorded) |
+| `navigate()` does not bump the tab epoch | RED: shell-tabs unit |
+| `recordPage` does not call `enforceCap` | RED: shell-tabs unit |
+| Unknown tool ids weigh 1 instead of the maximum | RED: shell-tabs unit |
+| LibreOffice marker removed from `weightOfPage` | RED: shell-tabs unit (5 failures, incl. the dist cross-check) |
+| Packaged build honours `BENTO_TEST_HEADLESS` | RED: argv-policy unit |
+| AppRun / launcher stops unsetting `BENTO_TEST_HEADLESS` | RED: argv-policy unit; gate logic (`check_unset`) fails on a mutated AppRun (simulated; no artifact built) |
+| `hasNetworkPrefix` ignores `\\.\...` | RED: open-file + shell-store unit |
+| `hasNetworkPrefix` rejects `\\?\C:\...` again / allows `\\?\UNC\...` | RED: open-file unit / open-file + shell-store unit |
+| Dialog grants back to a bare `stat` | RED: ipc unit |
+| No active-tab re-check after the dialog returns | RED: ipc unit |
+| Opener dereferences the store record unguarded | RED: shell-open-document unit |
+| `sanitizeText` without cap / without control stripping | RED: shell-hardening unit |
+
+New `packaging/verify-artifact.sh` checks and `packaging/test-verify-artifact.sh` mutations
+(BENTO_TEST_HEADLESS honoured when packaged; AppRun / Flatpak launcher no longer unsets it) are
+written but only the gate logic was exercised: no deb/rpm/AppImage/Flatpak was built in this round.
+
+**Packaged (Linux AppImage only, this branch's HEAD, built with
+`electron-builder --linux AppImage`, hardened, headless):** `verify-artifact.sh
+--allow-dirty` VERIFIED (13 checks; the NOTICE-marker line is the usual "not for
+release" note); `test/packaged-smoke.js` 16/16 with a PDF argument and 16/16
+without: shell UI served from `app.asar` (`bento://shell`, 129 tools
+rendered), tool tab isolated, renderers sandboxed, hostile `BENTO_*` env ignored,
+second instance forwards its PDF. deb, rpm, Flatpak, macOS, Windows: not built.
+
+**NOT VERIFIED (M3a):**
+
+- The packaged smoke test drives the artifact over `--remote-debugging-port`, which a packaged
+  build now refuses even with `BENTO_TEST_HEADLESS=1`; it was not re-run or adapted. The
+  packaged results above predate that change.
+
+- A visible window was never seen (headless only, the M2 display gate above
+  still applies); layout, focus, shortcuts and menus were never exercised by a
+  person or a real input event.
+- Print; annotate/edit in a viewer; redaction; signing flows; any tool other
+  than Merge PDF receiving the document.
+- macOS and Windows (menus use `CmdOrCtrl`, `appMenu` on macOS; UNC rules only
+  tested as strings on Linux).
+- Memory under real tab load: the live-view weights are estimates from M2 RSS
+  numbers, never measured on a running shell.
+- The `BENTO_TRANSPORT=http` path is a test-only harness and is not a supported
+  way to run the app.
+
+### Gap analysis vs Acrobat Pro (honest, by feature)
+
+"Upstream tool" = a BentoPDF page reachable from the sidebar. None of these
+has been checked for Acrobat-level fidelity; only Merge PDF receives the open
+document automatically today.
+
+| Acrobat Pro feature | BentoPDF (v2.8.10) | Notes |
+|---|---|---|
+| View (continuous viewer, thumbnails, search) | partial: `edit-pdf` (PDF Editor, EmbedPDF) views and searches; no standalone viewer page | no shell viewer yet |
+| Annotate / comment | `edit-pdf`, `add-stamps`, `remove-annotations` | not driven in any test |
+| Edit text | `edit-pdf-text` ("live reflow" per upstream) | Acrobat-grade reflow editing: not claimed |
+| Organize pages | `organize-pdf`, `pdf-multi-tool`, `rotate-pdf`, `delete-pages`, `extract-pages`, `add-blank-page`, `reverse-pages` | |
+| Combine / split | `merge-pdf` (handoff tested), `alternate-merge`, `split-pdf` | |
+| OCR | `ocr-pdf` (Tesseract) | 1-page OCR measured in M2 only |
+| Forms | `form-filler`, `form-creator` | |
+| Sign | `sign-pdf` (visual signature), `digital-sign-pdf`, `validate-signature-pdf` | digital sign has external timestamp/CORS calls that are only CSP-blocked (M2 findings) |
+| Redact | upstream says `edit-pdf` can redact; no dedicated page | NOT VERIFIED that content is removed, not covered |
+| Compare | `compare-pdfs` | |
+| Export (Word, Excel, images, text) | `pdf-to-word`, `pdf-to-excel`, `pdf-to-jpg`/`png`/`tiff`/`webp`/`svg`, `pdf-to-text`, `pdf-to-markdown`, ... | |
+| Protect | `protect-pdf`, `change-permissions`, `unlock-pdf`, `remove-restrictions`, `sanitize-pdf`, `remove-metadata` | |
+| Print | not in BentoPDF | needs shell work (M3b) |
+| Cloud, sharing, review workflows, accessibility checker, preflight | not in BentoPDF | out of scope |
 
 ## M4 entry criteria (do not start packaging before these have an answer)
 
