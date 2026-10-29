@@ -97,7 +97,8 @@ async function secondInstance(cdp, first) {
 async function slashSwitchRefused() {
   const probe = launch(['/no-sandbox'], { testMode: false });
   const exited = await until(() => probe.child.exitCode !== null && { code: probe.child.exitCode }, 60000, 'probe exit').catch(() => ({ code: 'timeout' }));
-  check('/no-sandbox is refused at start (exit 2)', exited.code === 2 && /refusing to start with unsafe switch/.test(probe.stderr), `exit=${exited.code} ${probe.stderr.slice(0, 200).replace(/\s+/g, ' ')}`);
+  // The portable stub does not forward stderr, so there only the exit code can be checked.
+  check('/no-sandbox is refused at start (exit 2)', exited.code === 2 && (probe.stderr === '' || /refusing to start with unsafe switch/.test(probe.stderr)), `exit=${exited.code} ${probe.stderr.slice(0, 200).replace(/\s+/g, ' ')}`);
   killTree(probe.child);
 }
 
