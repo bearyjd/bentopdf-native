@@ -97,8 +97,9 @@ values are unset). **Before any secret is added the repository owner must create
 `windows-signing`) restricted to `main` and `v*` tags and move the secrets there; the workflow deliberately names no
 environment, so nothing is created or protected until then.** No secrets were created by this work. electron-builder
 runs our `afterPack` fuse hook first and signs afterwards, so the signature covers the fused binary. **Signing was never
-exercised (no secrets exist): NOT VERIFIED.** Issue #13 (compile test mode out of release builds) must be resolved
-before ANY signed release: today the marker-gated test mode is present in the shipped code of every build.
+exercised (no secrets exist): NOT VERIFIED.** Issue #13 is addressed (this branch, see "Build flavours"): the release
+installer and portable carry no test mode, and only they are built in the signing step; the smoke flavour is built in
+its own step with no secret in its environment and refuses to build if any signing variable is set.
 
 ## File association ("Open with")
 
@@ -168,12 +169,40 @@ writes `app.getAppMetrics()` (`sandboxed`, `integrityLevel` per process) to the 
 every renderer (`Tab`) is `sandboxed: true` at `untrusted` or `low` integrity. This is Electron's own report of the
 OS-level sandbox, **only proven if the Windows run succeeded**.
 
-### Test mode on Windows (marker file)
+### Build flavours (issue #13)
 
-As on Linux, a packaged build enters test mode only with `BENTO_TEST_HEADLESS=1` in the environment **and** the
+As on Linux (`docs/desktop-linux.md`, "Build flavours"), `BENTO_FLAVOUR=release` (default) packs the stub
+`desktop/flavours/release/test-mode.js` and `build-flavour.js = 'release'`: a RELEASE installer/portable has no
+marker logic, no test-only switch and no honoured test variable, and `testModeOn` refuses test mode in the release
+flavour even when `app.isPackaged` is false (Electron derives it from the executable name, so a signed
+`BentoPDF Native.exe` copied as `electron.exe` would otherwise count as unpackaged, where the environment alone
+used to enable test mode). This closes the scenario of the PR #12 security review: malware that writes the marker
+and sets the variable next to a validly signed release executable gets no test mode, no hidden window and no
+accepted debug-port switch. `BENTO_FLAVOUR=smoke npm run dist:win` builds the SMOKE installer/portable into
+`desktop/release-smoke/` (names carry `SMOKE-ONLY-NOT-FOR-DISTRIBUTION`); CI builds it in the same job, gates it with
+`verify-artifact-win.sh --flavour smoke` (never `--release`) and never uploads it. Only `desktop/release/*.exe` are
+uploaded as candidates.
+
+What CI runs on Windows (`packaging/windows/smoke-installer.sh <setup> <portable> <smoke-setup>`):
+
+- RELEASE installer: the full install/registry/shortcut/uninstall lifecycle, the release gate on the installed tree,
+  and `packaged-smoke-win.js --mode release-refusal`: the marker written and `BENTO_TEST_HEADLESS=1` set, the app
+  started as itself and as a hard link named `electron.exe` must exit 2 without a `DevToolsActivePort` file; marker
+  and link are removed again (checked).
+- SMOKE installer (other directory, after the release uninstall): gate `--flavour smoke`, the full test-mode smoke
+  below, uninstall.
+- RELEASE portable: the checks that need no test mode.
+
+The Windows gate mutation test (`test-verify-artifact-win.sh --seed <release win-unpacked> --smoke-seed <smoke
+win-unpacked>`) runs the release-flavour mutations on the release tree and the marker-logic mutations on a copy
+carrying the smoke `app.asar`.
+
+### Test mode on Windows (smoke flavour only: marker file)
+
+As on Linux, a packaged SMOKE build enters test mode only with `BENTO_TEST_HEADLESS=1` in the environment **and** the
 marker file `resources\.bento-test-mode` (`src/test-mode.js`); every test-only behaviour in `main.js` (hidden window,
-debugging switches, event log, trace, sandbox report) keys off that combined result. Release artifacts never contain
-the marker (`verify-artifact-win.sh` fails if one is found, any case). Windows has no uid or mode bits, so the win32
+debugging switches, event log, trace, sandbox report) keys off that combined result. No artifact may contain the
+marker (`verify-artifact-win.sh` fails if one is found, any case), and release artifacts do not contain this code. Windows has no uid or mode bits, so the win32
 branch checks what it can:
 
 - `process.resourcesPath` is its own native real path (`realpathSync.native`, compared case-insensitively as NTFS
@@ -186,12 +215,14 @@ branch checks what it can:
 **Ownership and write permission are not checked; they are left to the install directory's ACLs.** A per-machine
 install under `Program Files` is writable only by administrators. A per-user install under `%LOCALAPPDATA%` is
 writable by that user, who can equally replace the executable itself, so the marker grants nothing extra there.
-As on Linux this is a tripwire, not a boundary: Chromium parses the debugging switch before any JavaScript runs.
+It exists only in the never-distributed smoke flavour. Chromium parses the debugging switch before any JavaScript
+runs, so even a release build started with it may hold the port until it exits 2; whether a listener appears in that
+window was NOT measured on Windows (the release-refusal check only proves exit 2 and no `DevToolsActivePort` file).
 The checks run as unit tests on every platform against a fake fs (each single check removed turns a test red), on
 real NTFS files on `windows-latest` (`test-mode.test.js`, and `tools/check-asar-policy.js` inside the Windows gate),
 and the gate also requires each control's text in the packaged `test-mode.js`.
 
-The CI smoke (`packaging/windows/smoke-installer.sh`) runs the gate on the installed tree first, then
+For the SMOKE installer the CI smoke runs the gate on the installed tree first, then
 `desktop/test/packaged-smoke-win.js`, which proves the installed copy refuses the test switches WITHOUT the marker
 (exit 2, no debug port), writes the marker into that disposable installed copy, runs the checks and removes it
 again; the lifecycle script asserts it is gone before the uninstall assertions ("no files left").
@@ -294,7 +325,8 @@ and tags. Earlier evidence from the pre-main branch (runs 40805536068 ... 408136
   are compared as bigint (fake-fs tests with ids that differ only beyond 2^53). On Windows a symlink swapped in after a grant is refused by the dev/ino identity check, not by `ELOOP`.
 - Licences of what the Windows packages add (NSIS, its plugins, Microsoft DLLs inside Electron) were not reviewed; see NOTICE.
 - Multi-argument second-instance launches were not re-measured beyond the INFO lines in the smoke log (issue #14).
-- The win32 marker check's reliance on install-directory ACLs (no owner/mode check) is a design statement, not tested.
+- The win32 marker check's reliance on install-directory ACLs (no owner/mode check) is a design statement, not tested;
+  since issue #13 it matters only for the never-distributed smoke flavour.
 - Linux side (dev host): `packaging/test-verify-artifact.sh --appimage-only` aborts silently when `desktop/release/` is
   absent (`newest()` under `set -euo pipefail`; a bug on main, not fixed here); with explicit
   `--deb /dev/null --rpm /dev/null --appimage <rebuilt AppImage>` it passes 78/0, and the Linux packaged smoke passes 18/18.
