@@ -7,7 +7,7 @@
 #   packaging/verify-artifact.sh [options] --tree <extracted-dir> --kind <appimage|deb|rpm|flatpak> [--scripts <dir>]
 #
 # Options:
-#   --release            also require: clean tree, a release tag in SOURCE.txt, zero "NEEDS REVIEW" in NOTICE
+#   --release            also require: clean tree, a release tag in SOURCE.txt, zero unresolved markers in NOTICE (packaging/check-notice.sh)
 #   --allow-dirty        accept SOURCE.txt saying dirty=yes (local experiments only)
 #   --expect-commit SHA  commit SOURCE.txt must name (default: git HEAD of this checkout)
 #
@@ -126,13 +126,14 @@ grep -q '^  describe: ' "$SRC" || fail "SOURCE.txt has no 'describe:' line"
 if grep -q "dirty=no" "$SRC"; then :; elif [ "$ALLOW_DIRTY" = 1 ]; then echo "warn: SOURCE.txt says the tree was dirty (allowed by --allow-dirty)" >&2; else fail "SOURCE.txt says the build tree was dirty"; fi
 pass "SOURCE.txt names commit $EXPECT_COMMIT, repository, upstream $UP_COMMIT, Electron version and sha256"
 
-NEEDS_REVIEW="$(grep -c 'NEEDS REVIEW' "$RES/NOTICE" || true)"
+# one marker definition for both gates: check-notice.sh (NEEDS REVIEW / TODO / TBD / UNVERIFIED, any case)
+NEEDS_REVIEW="$("$ROOT/packaging/check-notice.sh" "$RES/NOTICE")"
 if [ "$RELEASE" = 1 ]; then
-  [ "$NEEDS_REVIEW" = 0 ] || fail "release build but NOTICE has $NEEDS_REVIEW unresolved NEEDS REVIEW line(s)"
+  [ "$NEEDS_REVIEW" = 0 ] || fail "release build but NOTICE has $NEEDS_REVIEW unresolved marker line(s) (see packaging/check-notice.sh)"
   grep -Eq '^  release tag: +none' "$SRC" && fail "release build but SOURCE.txt says it was not built from a release tag"
   pass "release: NOTICE has no unresolved lines and SOURCE.txt names a release tag"
 else
-  echo "note: NOT FOR RELEASE: NOTICE has $NEEDS_REVIEW unresolved NEEDS REVIEW line(s)" >&2
+  echo "note: NOT FOR RELEASE: NOTICE has $NEEDS_REVIEW unresolved marker line(s) (see packaging/check-notice.sh)" >&2
 fi
 
 # ---- bundle and asar ----------------------------------------------------------
