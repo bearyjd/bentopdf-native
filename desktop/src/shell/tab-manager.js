@@ -97,6 +97,14 @@ function createTabManager({ views, maxLive = DEFAULT_MAX_LIVE, onLoaded = async 
     else if (id === activeId) await activate(id);
   }
 
+  /** The page navigated itself (e.g. a link to another tool): remember it for reloads. */
+  function recordPage(id, page, toolId = null) {
+    const tab = tabs.get(id);
+    if (!tab || tab.page === page) return;
+    set({ ...tab, page, toolId });
+    onChange();
+  }
+
   async function close(id) {
     if (!tabs.has(id)) throw new Error('unknown tab');
     discard(id);
@@ -125,6 +133,7 @@ function createTabManager({ views, maxLive = DEFAULT_MAX_LIVE, onLoaded = async 
     open,
     activate,
     navigate,
+    recordPage,
     close,
     next: () => cycle(1),
     previous: () => cycle(-1),

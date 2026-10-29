@@ -17,10 +17,13 @@ const { dialog, Menu, shell } = require('electron');
 const { prepare, startApp, TRANSPORTS, log } = require('./app');
 const brand = require('../brand.json');
 const { aboutDetail, buildMenuTemplate, SOURCE_URL } = require('./menu');
+const { startShell } = require('./shell/shell-app');
+const { buildShellMenuTemplate } = require('./shell/shell-menu');
 const { unsafeSwitches } = require('./argv-policy');
 const { pdfPathsFromArgv } = require('./open-file');
 
-// Decided by experiment, see docs/m2-findings.md.
+// Decided by experiment, see docs/m2-findings.md. The tabbed shell (M3a) needs the
+// scheme; BENTO_TRANSPORT=http (dev only) still starts the single-window M2 app.
 const DEFAULT_TRANSPORT = 'scheme';
 
 // Dev overrides only: a packaged app must not be redirected by its environment.
@@ -38,19 +41,30 @@ const die = (what, err) => {
 process.on('uncaughtException', (err) => die('uncaughtException', err));
 process.on('unhandledRejection', (err) => die('unhandledRejection', err));
 
+const showAbout = () =>
+  dialog.showMessageBox({
+    type: 'info',
+    title: `About ${brand.productName}`,
+    message: `${brand.productName} ${app.getVersion()}`,
+    detail: aboutDetail(),
+    buttons: ['OK', 'Open source code'],
+    defaultId: 0,
+    noLink: true,
+  }).then(({ response }) => (response === 1 ? shell.openExternal(SOURCE_URL) : undefined));
+const openSource = () => shell.openExternal(SOURCE_URL);
+
 function installMenu() {
-  const showAbout = () =>
-    dialog.showMessageBox({
-      type: 'info',
-      title: `About ${brand.productName}`,
-      message: `${brand.productName} ${app.getVersion()}`,
-      detail: aboutDetail(),
-      buttons: ['OK', 'Open source code'],
-      defaultId: 0,
-      noLink: true,
-    }).then(({ response }) => (response === 1 ? shell.openExternal(SOURCE_URL) : undefined));
-  const openSource = () => shell.openExternal(SOURCE_URL);
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ showAbout, openSource, devtools: !app.isPackaged })));
+}
+
+/** Rebuilt when the recent-files list changes (Open Recent submenu). */
+let menuRecents = null;
+function installShellMenu(menuActions, recents) {
+  const key = JSON.stringify(recents);
+  if (key === menuRecents) return;
+  menuRecents = key;
+  const template = buildShellMenuTemplate({ ...menuActions, showAbout, openSource }, { recents, devtools: !app.isPackaged });
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 const refused = unsafeSwitches(process.argv);
@@ -102,8 +116,17 @@ if (refused.length > 0) {
   app
     .whenReady()
     .then(async () => {
-      installMenu();
-      handle = await startApp({ distDir, transport });
+      if (transport === 'scheme') {
+        let menuActions = null;
+        const onStateChanged = (state) => menuActions && installShellMenu(menuActions, state.recents);
+        const started = await startShell({ distDir, homeTab: waiting.length === 0, onStateChanged });
+        menuActions = started.menuActions;
+        installShellMenu(menuActions, started.recents.list());
+        handle = started;
+      } else {
+        installMenu();
+        handle = await startApp({ distDir, transport });
+      }
       openPaths(waiting.splice(0));
     })
     .catch((err) => die('Failed to start', err));

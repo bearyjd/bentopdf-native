@@ -14,7 +14,7 @@ export default [
   },
   {
     // Code evaluated inside the page / sandboxed preload runs in a browser context.
-    files: ['src/preload.js'],
+    files: ['src/preload.js', 'src/shell/shell-preload.js', 'src/shell/ui/**/*.js'],
     languageOptions: { globals: { ...globals.browser } },
   },
 ];

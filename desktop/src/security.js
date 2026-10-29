@@ -79,9 +79,11 @@ function lockSession(session, origin, onBlocked, { allowDevtools = false, onPerm
 /**
  * Guards for every WebContents the app ever creates: no new windows (external
  * https opens in the system browser only if allowlisted), navigation and
- * redirects pinned to the app origin, no <webview>.
+ * redirects pinned to the app origin, no <webview>. `originFor(contents)`
+ * picks the one origin a given WebContents is pinned to (the shell UI has its
+ * own); it defaults to `origin` for every WebContents.
  */
-function lockWebContents({ origin, externalAllowlist = [], log, openExternal = shell.openExternal }) {
+function lockWebContents({ origin, externalAllowlist = [], log, openExternal = shell.openExternal, originFor = () => origin }) {
   const allowed = new Set(externalAllowlist);
   app.on('web-contents-created', (_event, contents) => {
     contents.setWindowOpenHandler(({ url }) => {
@@ -99,7 +101,7 @@ function lockWebContents({ origin, externalAllowlist = [], log, openExternal = s
     // Default deny: anything that is not provably the app origin is blocked.
     const pin = (event, url) => {
       try {
-        if (isAppUrl(url, origin)) return;
+        if (isAppUrl(url, originFor(contents))) return;
         log(`blocked navigation: ${url}`);
       } catch (err) {
         log(`blocked navigation (${err.message})`);

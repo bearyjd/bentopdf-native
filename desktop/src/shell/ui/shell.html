@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>BentoPDF</title>
+  <link rel="stylesheet" href="shell.css">
+  <script src="shell.js" defer></script>
+</head>
+<body>
+  <header id="tabstrip" role="tablist" aria-label="Open tabs"></header>
+  <aside id="sidebar">
+    <button id="open-file" type="button">Open PDF...</button>
+    <section aria-labelledby="recents-title">
+      <h2 id="recents-title">Recent files</h2>
+      <ul id="recents"></ul>
+    </section>
+    <section class="tools" aria-labelledby="tools-title">
+      <h2 id="tools-title">Tools</h2>
+      <input id="tool-search" type="search" placeholder="Search tools" aria-label="Search tools" autocomplete="off">
+      <div id="tools"></div>
+    </section>
+  </aside>
+  <main id="content">
+    <p id="empty">Open a PDF (Ctrl+O) or pick a tool on the left.</p>
+    <p id="status" role="status"></p>
+  </main>
+</body>
+</html>
