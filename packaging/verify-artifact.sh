@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Release gate. Inspects a built Linux artifact without installing or starting it
-# and fails on the first violated rule. Missing or empty inputs are failures,
+# Release gate. Inspects a built Linux artifact without installing or starting it (the one exception: it loads
+# the packaged src/test-mode.js and src/argv-policy.js, pure node:fs/node:path modules, into a throwaway node process) and fails on the first violated rule. Missing or empty inputs are failures,
 # never skipped checks.
 #
 #   packaging/verify-artifact.sh [options] <file.AppImage | file.deb | file.rpm | flatpak-build-dir>
@@ -17,6 +17,9 @@
 # sandbox-off env; deb/rpm post-install policy; Flatpak permissions; file modes (nothing
 # group/world-writable, nothing setuid or setgid, chrome-sandbox exactly 0755 and absent
 # from the Flatpak). Names come from desktop/brand.json.
+# Packaged test mode: the packaged test-mode.js / argv-policy.js are RUN (desktop/tools/check-asar-policy.js), not just
+# grepped, and no .bento-test-mode may exist. deb/rpm launchers start the binary with no env scrub, so for them the
+# root-owned install tree (every entry root:root, nothing group/world-writable) is the only defence: see docs/desktop-linux.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -145,20 +148,29 @@ pass "offline bundle is an extraResource outside app.asar; app.asar is $(stat -c
 ASAR="$ROOT/desktop/node_modules/.bin/asar"
 [ -x "$ASAR" ] || fail "asar tool missing (run npm ci in desktop/)"
 "$ASAR" extract "$ASAR_PATH" "$WORK/asar"
-for f in src/main.js src/menu.js src/argv-policy.js src/open-file.js brand.json; do
+for f in src/main.js src/menu.js src/argv-policy.js src/test-mode.js src/open-file.js brand.json; do
   [ -s "$WORK/asar/$f" ] || fail "app.asar lacks $f"
 done
 grep -q 'app.isPackaged ? {} : process.env' "$WORK/asar/src/main.js" || fail "main.js does not gate BENTO_* overrides on app.isPackaged"
-if grep -rn 'process\.env' "$WORK/asar/src" | grep -Ev 'src/main.js:.*(overrides = app.isPackaged|process\.env\[name\])|src/argv-policy.js:.*NEVER_MATCHES'; then
-  fail "process.env is read somewhere other than the guarded overrides line, the sandbox-env refusal and the argv policy default"
-fi
-pass "BENTO_* overrides are read only through the app.isPackaged guard"
+# process.env: parsed, not grepped. Comments never count; the four known lines must match exactly, so a read
+# appended to one of them fails. The same helper RUNS the packaged marker logic and argv policy (see below).
+node "$ROOT/desktop/tools/check-asar-policy.js" "$WORK/asar" || fail "process.env is read outside the known guarded lines, or the packaged marker logic / argv policy misbehaves"
+pass "BENTO_* overrides are read only through the app.isPackaged guard; packaged marker logic and argv policy behave as designed"
 
 grep -q "'ELECTRON_DISABLE_SANDBOX'" "$WORK/asar/src/main.js" && grep -q "'CHROME_DEVEL_SANDBOX'" "$WORK/asar/src/main.js" || fail "main.js does not refuse to start when ELECTRON_DISABLE_SANDBOX / CHROME_DEVEL_SANDBOX is set"
 grep -q 'app.exit(2)' "$WORK/asar/src/main.js" || fail "main.js has no exit-2 refusal"
 grep -q "require('./argv-policy')" "$WORK/asar/src/main.js" || fail "main.js does not load the argv policy"
-grep -qF 'unsafeSwitches(process.argv, overrides, { packaged: app.isPackaged })' "$WORK/asar/src/main.js" || fail "main.js does not check its own argv"
-grep -qF 'unsafeSwitches(argv, overrides, { secondInstance: true, packaged: app.isPackaged })' "$WORK/asar/src/main.js" || fail "main.js does not check second-instance argv"
+grep -qF 'unsafeSwitches(process.argv, process.env, policyOptions)' "$WORK/asar/src/main.js" || fail "main.js does not check its own argv"
+grep -qF 'unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true })' "$WORK/asar/src/main.js" || fail "main.js does not check second-instance argv"
+grep -qF 'packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath)' "$WORK/asar/src/main.js" || fail "main.js does not gate packaged test mode on the marker file"
+# The marker logic itself, as text (the helper above also runs it): each control must still be spelled out in test-mode.js,
+# the argv policy must require the marker for packaged builds, and main.js must feed it the marker result.
+for needle in 'fsImpl.constants.O_NOFOLLOW' 'fsImpl.fstatSync(fd)' '!st.isFile()' 'st.nlink !== 1' 'st.uid !== uid' '(st.mode & 0o022) !== 0' 'st.size !== MARKER_CONTENT.length' '=== MARKER_CONTENT' 'fsImpl.realpathSync(resourcesPath) !== path.resolve(resourcesPath)' "typeof uid !== 'number'"; do
+  grep -qF -- "$needle" "$WORK/asar/src/test-mode.js" || fail "test-mode.js lost the marker control: $needle"
+done
+grep -qF "const MARKER_CONTENT = 'bento-test-mode-v1\\n';" "$WORK/asar/src/test-mode.js" || fail "test-mode.js marker token changed"
+grep -qF "(!packaged || testMarker === true)" "$WORK/asar/src/argv-policy.js" || fail "argv-policy.js does not require testMarker === true for a packaged build"
+pass "test-mode.js carries every marker control (O_NOFOLLOW, fstat, regular file, nlink, owner, mode, size, token, realpath); argv policy requires testMarker === true"
 grep -q '%PDF-' "$WORK/asar/src/open-file.js" || fail "open-file.js does not check the %PDF- header"
 grep -q 'realpath' "$WORK/asar/src/open-file.js" || fail "open-file.js does not resolve symlinks"
 pass "argv policy (own and second-instance argv) and open-with header/symlink checks are present"
@@ -184,6 +196,11 @@ if [ -d "$SCRIPTS" ] && [ -n "$(ls -A "$SCRIPTS")" ]; then
   if grep -rEn -- "$FORBIDDEN" "$SCRIPTS"; then fail "forbidden flag in a maintainer script"; fi
 fi
 pass "no sandbox-off / devtools / inspect flags in app code, $SCANNED desktop entries or launchers, or maintainer scripts"
+
+# A release artifact must never carry the packaged test-mode marker (desktop/src/test-mode.js), anywhere in the tree.
+MARKERS="$(find "$OUT" -name .bento-test-mode -print 2>/dev/null | head -3)"
+[ -z "$MARKERS" ] || { printf '%s\n' "$MARKERS" >&2; fail "the test-mode marker .bento-test-mode is present in the artifact"; }
+pass "no .bento-test-mode marker anywhere in the artifact"
 
 # ---- desktop entries ----------------------------------------------------------
 DESKTOPS=0
@@ -224,7 +241,16 @@ case "$KIND" in
     grep -q 'apparmor_restrict_unprivileged_userns' "$POST" || fail "post-install does not look at the AppArmor userns restriction"
     grep -q 'chmod 4755' "$POST" || fail "post-install has no setuid fallback for the sandbox helper"
     grep -q 'chmod 0755' "$POST" || fail "post-install does not reset the sandbox helper to 0755 first"
-    pass "post-install: non-root userns probe, AppArmor-aware, setuid helper only as fallback" ;;
+    pass "post-install: non-root userns probe, AppArmor-aware, setuid helper only as fallback"
+    # deb/rpm launchers start the binary directly, with NO env scrub. For these the only defence for the packaged
+    # test mode is that the install tree is root-owned (a user cannot create the marker in it): see docs/desktop-linux.md.
+    if [ -z "$TREE" ]; then
+      if [ "$KIND" = deb ]; then dpkg-deb -c "$ART" > "$WORK/owners.txt" || fail "cannot list the package owners"; else rpm -qp --queryformat '[%{FILEUSERNAME}:%{FILEGROUPNAME}\n]' "$ART" > "$WORK/owners.txt" || fail "cannot list the package owners"; fi
+      [ -s "$WORK/owners.txt" ] || fail "empty package owner listing"
+      if [ "$KIND" = deb ]; then NOT_ROOT="$(awk '$2 != "0/0" && $2 != "root/root" {n++} END {print n+0}' "$WORK/owners.txt")"; else NOT_ROOT="$(awk '$0 != "root:root" {n++} END {print n+0}' "$WORK/owners.txt")"; fi
+      [ "$NOT_ROOT" = 0 ] || fail "$NOT_ROOT package entr(ies) not owned by root:root (the root-owned install tree is the only marker defence for $KIND)"
+      pass "$KIND payload: all $(wc -l < "$WORK/owners.txt") entries owned by root:root, so no unprivileged user can plant the test-mode marker"
+    fi ;;
   flatpak)
     L="$PAYLOAD/bin/$EXE_NAME"
     [ -s "$L" ] || fail "flatpak launcher bin/$EXE_NAME missing"

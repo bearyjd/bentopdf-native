@@ -1,32 +1,45 @@
 'use strict';
 
-// Headless smoke test of a PACKAGED build. Usage:
-//   node test/packaged-smoke.js <AppImage | path/to/bentopdf-native | flatpak:<app-id>>
-// For flatpak: the app is run with test-only overrides (--share=network so the
-// host can reach the DevTools port, --filesystem=<temp dir> for the test PDFs);
-// the shipped manifest grants neither. The second-instance check is skipped there
-// (each `flatpak run` has its own sandbox /tmp, so Chromium's singleton socket is not shared).
-// Launches the real artifact with --ozone-platform=headless, hostile BENTO_*
-// environment variables and a PDF argument, then drives the pages (a tool tab and
-// the shell UI; run against a packaged AppImage, see docs/shell.md) over the
-// Chromium DevTools protocol (a Chromium flag, so it needs no hook in the app).
+// Headless smoke test of a PACKAGED AppImage. Usage:
+//   node test/packaged-smoke.js <file.AppImage>
+// A packaged build honours test mode (the debug port, headless platform) only when BENTO_TEST_HEADLESS=1
+// AND the file resources/.bento-test-mode exist (src/test-mode.js). So this runner extracts the AppImage
+// into a disposable temp directory (--appimage-extract), creates the marker in that COPY only, and
+// runs the extracted binary directly with the env (AppRun scrubs BENTO_* for normal launches; a
+// separate check proves AppRun still does, and another that the copy without the marker refuses).
+// Flatpak and deb/rpm are not supported here. The release artifact is never modified: it is copied into the
+// temp dir first and the copy is made executable and extracted.
+// The launched app gets HOME and XDG_* directories inside the temp dir, and never inherits
+// ELECTRON_DISABLE_SANDBOX / CHROME_DEVEL_SANDBOX from this runner's environment.
+// Launches with --ozone-platform=headless, hostile BENTO_* environment variables and a PDF argument, then
+// drives the pages (a tool tab and the shell UI, see docs/shell.md) over the Chromium DevTools protocol
+// (a Chromium flag, so it needs no hook in the app).
 // SMOKE_NO_PDF=1 starts it without a PDF argument (a home tab instead of a document tab).
 // Nothing is ever shown on screen. Exit code is non-zero on any failed check.
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const target = process.argv[2];
-if (!target) {
-  process.stderr.write('usage: packaged-smoke.js <AppImage|binary>\n');
+if (!target || !target.endsWith('.AppImage')) {
+  process.stderr.write('usage: packaged-smoke.js <file.AppImage>\n');
   process.exit(2);
 }
+const { executableName } = require('../brand.json');
+const { MARKER_NAME, MARKER_CONTENT } = require('../src/test-mode');
 const tmpBase = os.tmpdir().length > 40 ? '/tmp' : os.tmpdir(); // short: Chromium's single-instance socket path
-const work = fs.mkdtempSync(path.join(tmpBase, 'bento-pkg-'));
+// realpath: the marker check refuses a resources path that goes through a symlink (e.g. /tmp -> /private/tmp).
+const work = fs.realpathSync(fs.mkdtempSync(path.join(tmpBase, 'bento-pkg-')));
+const home = path.join(work, 'home');
+const xdg = { XDG_CONFIG_HOME: path.join(home, 'config'), XDG_CACHE_HOME: path.join(home, 'cache'), XDG_DATA_HOME: path.join(home, 'data'), XDG_RUNTIME_DIR: path.join(work, 'run') };
 const profile = path.join(work, 'profile');
 const pdfA = path.join(work, 'first.pdf');
 const pdfB = path.join(work, 'second.pdf');
+const appRoot = path.join(work, 'squashfs-root'); // the disposable copy of the AppImage
+const binary = path.join(appRoot, executableName);
+const marker = path.join(appRoot, 'resources', MARKER_NAME);
+for (const dir of [home, ...Object.values(xdg)]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 fs.writeFileSync(pdfA, '%PDF-1.4\nfirst\n');
 fs.writeFileSync(pdfB, '%PDF-1.4\nsecond\n');
 
@@ -49,23 +62,52 @@ async function until(fn, ms, what) {
 // SMOKE_EXTRA_ARGS exists only for negative controls (e.g. --no-sandbox must make this test fail).
 const extra = (process.env.SMOKE_EXTRA_ARGS || '').split(' ').filter(Boolean);
 const appArgs = ['--ozone-platform=headless', '--remote-debugging-port=0', `--user-data-dir=${profile}`, ...extra];
-const isFlatpak = target.startsWith('flatpak:');
-const launch = (files) => {
-  const isImage = target.endsWith('.AppImage');
-  const command = isFlatpak ? 'flatpak' : target;
-  const args = isFlatpak
-    ? ['run', '--user', '--share=network', '--env=BENTO_TEST_HEADLESS=1', `--filesystem=${work}`, target.slice('flatpak:'.length), ...appArgs, ...files]
-    : [...(isImage ? ['--appimage-extract-and-run'] : []), ...appArgs, ...files];
-  const child = spawn(command, args, {
+const extractCopy = () => {
+  const copy = path.join(work, 'artifact.AppImage'); // never chmod or otherwise touch the release artifact itself
+  fs.copyFileSync(target, copy);
+  fs.chmodSync(copy, 0o755);
+  const r = spawnSync(copy, ['--appimage-extract'], { cwd: work, stdio: 'ignore', timeout: 180000, killSignal: 'SIGKILL' });
+  if (r.status !== 0 || !fs.existsSync(binary)) throw new Error(`could not extract the AppImage (status=${r.status} signal=${r.signal})`);
+  fs.unlinkSync(copy);
+};
+const writeMarker = () => fs.writeFileSync(marker, MARKER_CONTENT, { mode: 0o644 });
+// `exe` is the extracted binary (needs the marker) or the extracted AppRun (scrubs the env).
+const launched = [];
+const killGroup = (run, signal) => { try { process.kill(-run.child.pid, signal); } catch { /* gone */ } };
+const launch = (files, { exe = binary, args = appArgs } = {}) => {
+  // Scrubbed here so a sandbox-off variable in the runner's own environment cannot change what the controls prove.
+  const inherited = { ...process.env };
+  delete inherited.ELECTRON_DISABLE_SANDBOX;
+  delete inherited.CHROME_DEVEL_SANDBOX;
+  const child = spawn(exe, [...args, ...files], {
     detached: true,
     stdio: ['ignore', 'ignore', 'pipe'],
-    // The packaged app must ignore all of these.
-    env: { ...process.env, BENTO_TEST_HEADLESS: '1', TMPDIR: tmpBase, BENTO_DIST: '/nonexistent', BENTO_TRANSPORT: 'carrier-pigeon' },
+    // The packaged app must ignore all of these except the test mode, which the marker unlocks in this copy.
+    env: { ...inherited, ...xdg, HOME: home, BENTO_TEST_HEADLESS: '1', TMPDIR: work, BENTO_DIST: '/nonexistent', BENTO_TRANSPORT: 'carrier-pigeon' },
   });
   const out = { stderr: '', child };
   child.stderr.on('data', (c) => (out.stderr += c));
+  launched.push(out);
   return out;
 };
+const exitOf = (run) => until(() => run.child.exitCode !== null && { code: run.child.exitCode }, 90000, 'exit').catch(() => {
+  killGroup(run, 'SIGKILL'); // a hung refusal check must not leave a process tree behind
+  return { code: 'timeout' };
+});
+
+// Negative controls: without the marker the binary refuses the debug port; and AppRun scrubs the env even with the marker.
+async function refusalChecks() {
+  // Exit 2 alone is not enough: the stderr must be the argv-policy refusal, not e.g. the sandbox-env refusal.
+  const bare = launch([]);
+  const noMarker = await exitOf(bare);
+  check('copy WITHOUT the marker refuses the test switches (exit 2, unsafe-switch message, no debug port)',
+    noMarker.code === 2 && /unsafe switch/.test(bare.stderr) && !/DevTools listening/.test(bare.stderr), `exit=${noMarker.code}`);
+  writeMarker();
+  const viaAppRun = launch([], { exe: path.join(appRoot, 'AppRun') });
+  const scrubbed = await exitOf(viaAppRun);
+  check('AppRun scrubs BENTO_TEST_HEADLESS: copy WITH the marker via AppRun refuses (exit 2, no debug port)',
+    scrubbed.code === 2 && !/DevTools listening/.test(viaAppRun.stderr) && /unsafe switch/.test(viaAppRun.stderr), `exit=${scrubbed.code}`);
+}
 
 function descendants(rootPid) {
   const parent = new Map();
@@ -120,12 +162,14 @@ async function secondInstance(shellCdp) {
   const exited = await until(() => second.child.exitCode !== null && { code: second.child.exitCode }, 60000, 'second instance exit').catch(() => ({ code: 'timeout' }));
   check('second instance exits cleanly', exited.code === 0, `exit=${exited.code}`);
   check('second instance forwarded its PDF to the first (new document tab)', await until(() => shellHasDoc(shellCdp, 'second.pdf'), 20000, 'forwarded file').catch(() => false));
-  try { process.kill(-second.child.pid, 'SIGKILL'); } catch { /* gone */ }
+  killGroup(second, 'SIGKILL');
 }
 
 async function main() {
-  const first = launch(process.env.SMOKE_NO_PDF ? [] : [pdfA]);
   try {
+    extractCopy();
+    await refusalChecks();
+    const first = launch(process.env.SMOKE_NO_PDF ? [] : [pdfA]);
     const port = await until(() => (first.stderr.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/) || [])[1], 90000, 'DevTools port');
     const findPage = (prefix) => until(async () => {
       const list = await fetch(`http://127.0.0.1:${port}/json`).then((r) => r.json()).catch(() => []);
@@ -183,12 +227,12 @@ async function main() {
     check('shell UI served from the packaged asar (bento://shell, ready, tool list rendered)', shellFacts.origin === 'bento://shell' && shellFacts.ready === 'true' && shellFacts.tools > 100, JSON.stringify(shellFacts));
 
     // Second instance forwards its file to the first (single-instance lock).
-    if (!isFlatpak) await secondInstance(shellCdp);
+    await secondInstance(shellCdp);
   } finally {
-    try { process.kill(-first.child.pid, 'SIGTERM'); } catch { /* gone */ }
+    for (const run of launched) killGroup(run, 'SIGTERM');
     await wait(1500);
-    try { process.kill(-first.child.pid, 'SIGKILL'); } catch { /* gone */ }
-    fs.rmSync(work, { recursive: true, force: true });
+    for (const run of launched) killGroup(run, 'SIGKILL');
+    fs.rmSync(work, { recursive: true, force: true }); // work was created by mkdtemp above; nothing else is removed
   }
 }
 

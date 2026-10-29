@@ -178,6 +178,14 @@ Final fix round (each mutation applied alone to the worktree files, then restore
 | LibreOffice marker removed from `weightOfPage` | RED: shell-tabs unit (5 failures, incl. the dist cross-check) |
 | Packaged build honours `BENTO_TEST_HEADLESS` | RED: argv-policy unit |
 | AppRun / launcher stops unsetting `BENTO_TEST_HEADLESS` | RED: argv-policy unit; gate logic (`check_unset`) fails on a mutated AppRun (simulated; no artifact built) |
+| Policy honours the test switches in a packaged build without the marker (env alone / marker check removed) | RED: argv-policy unit (both variants) |
+| Marker accepted as a symlink / foreign owner / group-world-writable / any content / hard-linked / through a symlinked resources path / with `isFile` or the size check removed / without `O_NOFOLLOW` | RED: test-mode unit (each mutation alone; `isFile` and size are killed by the fake-`fs` cases, so they are not equivalent mutants). Removing only the `typeof uid` guard stays green: equivalent on POSIX, where a numeric uid never equals `null`/`undefined` |
+| Gate: `hasTestMarker` returns true / nlink, owner, mode, `O_NOFOLLOW`, token or realpath check removed / argv-policy marker condition dropped or made truthy / `main.js` passes a constant | RED: `test-verify-artifact.sh` (AppImage tree), each with its expected failure message |
+| Gate: real `process.env` read appended to an exempt line, `process["env"]`, `const { env } = process` | RED: gate (exact-line AST match); a comment mentioning `process.env` stays GREEN, as required |
+| Hash-only navigation: dropped handoff leaves 'Loading...' | RED: e2e shellHandoffHashNav |
+| Epoch guard removed / URL re-check removed | RED: e2e shellHandoffReload / shellHandoffUrlChanged; shellHandoffNavigated stays green under either one alone (the other guard catches it) |
+| Blocked-request URL / unsafe switches logged raw | RED: e2e shellBlockedUrlLog / main-entry |
+| releaseDocument without the post-await re-check | RED: shell-open-document unit (2) |
 | `hasNetworkPrefix` ignores `\\.\...` | RED: open-file + shell-store unit |
 | `hasNetworkPrefix` rejects `\\?\C:\...` again / allows `\\?\UNC\...` | RED: open-file unit / open-file + shell-store unit |
 | Dialog grants back to a bare `stat` | RED: ipc unit |
@@ -197,11 +205,40 @@ without: shell UI served from `app.asar` (`bento://shell`, 129 tools
 rendered), tool tab isolated, renderers sandboxed, hostile `BENTO_*` env ignored,
 second instance forwards its PDF. deb, rpm, Flatpak, macOS, Windows: not built.
 
+**Packaged, after the test-mode marker (S4, AppImage rebuilt from 887aeed with electron-builder + harden,
+deb/rpm not built: fpm fails here on a missing libcrypt.so.1):** `verify-artifact.sh --expect-commit 887aeed`
+VERIFIED (14 ok lines incl. the new no-marker check; same "not for release" NOTICE note); with a marker
+added to a real extracted tree (resources/, root, symlink) the gate FAILS in all 3 cases.
+`test/packaged-smoke.js` (extracted copy + marker) 18/18 with a PDF argument and 18/18 with
+`SMOKE_NO_PDF=1`, including the two negative controls (no marker => exit 2; AppRun scrubs the env =>
+exit 2). (Superseded below: `test-verify-artifact.sh` was run for the AppImage tree only after the S4 review fixes.)
+
+**S4 review fixes (gate and marker hardening; final-run results are in the hand-off report, not in this file):**
+
+- `main` regression: the Verify-artifacts job (workflow run 40829280033) failed because `grep -rn 'process\.env'` flagged
+  the word in a comment in `argv-policy.js`. The check now parses the packaged sources
+  (`desktop/tools/check-asar-policy.js`): comments are ignored, and the four allowed reads must match as exact lines
+  (a read appended to one of them, `process["env"]`, `globalThis.process.env` or `const { env } = process` fails).
+- The gate now RUNS the packaged `test-mode.js` and `argv-policy.js` (valid marker accepted; hard link, foreign owner,
+  group/world-writable, symlink, directory, symlinked resources path, near-miss token refused; env alone or a truthy
+  non-`true` marker still refuses the debug port) and checks the marker controls are still spelled out. Every mutation
+  case in `test-verify-artifact.sh` now names the substring its failure must contain (it also gained
+  `--appimage-only` for machines that cannot build deb/rpm; that mode prints a note and is not a release check).
+- `hasTestMarker` additionally requires one hard link and a resources path that is its own real path. On win32 it
+  fails closed (no uid/mode semantics), so packaged test mode is unavailable on Windows; a Windows validation
+  (reparse-point refusal, token, location under the install directory, Administrators/SYSTEM-only write) is the next
+  step and is not implemented.
+- deb/rpm launchers start the binary with no env scrub; for them the root-owned install tree is the only defence.
+  The gate asserts `root:root` for every entry of a real `.deb`/`.rpm` (not available for `--tree`); that assertion
+  was never run against a package built from this branch (fpm cannot build deb/rpm here).
+- The marker is a tripwire, not a boundary: Chromium parses `--remote-debugging-port` before any JavaScript runs.
+  The `--remote-debugging-pipe` follow-up remains open. See `docs/desktop-linux.md`, "Packaged test mode".
+
 **NOT VERIFIED (M3a):**
 
 - The packaged smoke test drives the artifact over `--remote-debugging-port`, which a packaged
-  build now refuses even with `BENTO_TEST_HEADLESS=1`; it was not re-run or adapted. The
-  packaged results above predate that change.
+  build refuses even with `BENTO_TEST_HEADLESS=1`. It is adapted (it extracts a copy and plants the marker there)
+  and was re-run in S4 (see above); the M3a packaged results in the paragraph before that predate it.
 
 - A visible window was never seen (headless only, the M2 display gate above
   still applies); layout, focus, shortcuts and menus were never exercised by a

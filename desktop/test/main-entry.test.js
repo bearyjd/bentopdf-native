@@ -96,3 +96,13 @@ test('main.js: refuses to start with a switch off the allowlist, in either dash 
     assert.ok(stderr.includes(`unsafe switch(es): ${arg}`), stderr);
   }
 });
+
+test('main.js: an unsafe switch is logged as one bounded line (no forged log lines, no unbounded text)', async () => {
+  const hostile = `--evil\n[bento] FORGED line${'x'.repeat(5000)}`;
+  const { code, stderr } = await exitCodeOf([hostile], {});
+  assert.equal(code, 2);
+  const lines = stderr.split('\n').filter((l) => l.includes('unsafe switch(es)'));
+  assert.equal(lines.length, 1, stderr.slice(0, 600));
+  assert.ok(lines[0].length < 400, `line is ${lines[0].length} characters`);
+  assert.ok(!stderr.split('\n').some((l) => l.startsWith('[bento] FORGED')), 'a forged log line appeared');
+});

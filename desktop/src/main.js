@@ -21,6 +21,8 @@ const { startShell } = require('./shell/shell-app');
 const { buildShellMenuTemplate } = require('./shell/shell-menu');
 const { unsafeSwitches } = require('./argv-policy');
 const { pdfPathsFromArgv } = require('./open-file');
+const { hasTestMarker } = require('./test-mode');
+const { createLimitedLogger, sanitizeText } = require('./shell/bounded');
 const { DEFAULT_TRANSPORT, startKindFor } = require('./start-mode');
 
 // Decided by experiment, see docs/m2-findings.md. The tabbed shell (M3a) needs the
@@ -68,9 +70,13 @@ function installShellMenu(menuActions, recents) {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-const refused = unsafeSwitches(process.argv, overrides, { packaged: app.isPackaged });
+// Test mode in a packaged build needs the environment AND the marker file (src/test-mode.js).
+const policyOptions = { packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath) };
+// Switch text comes from whoever started us (or, for a second launch, any local process): bounded, one line, rate limited.
+const logLimited = createLimitedLogger(log);
+const refused = unsafeSwitches(process.argv, process.env, policyOptions);
 if (refused.length > 0) {
-  process.stderr.write(`[bento] refusing to start with unsafe switch(es): ${refused.join(' ')}\n`);
+  process.stderr.write(`[bento] refusing to start with unsafe switch(es): ${sanitizeText(refused.join(' '))}\n`);
   app.exit(2);
 } else if (!TRANSPORTS.includes(transport)) {
   process.stderr.write(`BENTO_TRANSPORT must be one of ${TRANSPORTS.join(', ')}\n`);
@@ -94,9 +100,9 @@ if (refused.length > 0) {
   };
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
-    const unsafe = unsafeSwitches(argv, overrides, { secondInstance: true, packaged: app.isPackaged });
+    const unsafe = unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true });
     if (unsafe.length > 0) {
-      log(`ignored a second launch with unsafe switch(es): ${unsafe.join(' ')}`);
+      logLimited('second-instance', `ignored a second launch with unsafe switch(es): ${sanitizeText(unsafe.join(' '))}`);
       return;
     }
     const win = handle && handle.window;

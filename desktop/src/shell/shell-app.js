@@ -14,8 +14,8 @@ const { buildToolRegistry } = require('./tool-registry');
 const { createTabManager } = require('./tab-manager');
 const { createViewAdapter } = require('./tab-views');
 const { prepareSession, releaseSession, SHELL_HEADERS, SHELL_HOST } = require('./sessions');
-const { pushCapped, addCapped, createLogLimiter, sanitizeText } = require('./bounded');
-const { createDocumentOpener } = require('./open-document');
+const { pushCapped, addCapped, createLimitedLogger, sanitizeText } = require('./bounded');
+const { createDocumentOpener, createDocumentReleaser } = require('./open-document');
 const { isPermanentOpenFailure } = require('./recents');
 const { registerShellIpc } = require('./shell-ipc');
 const { SHELL_CHANNELS } = require('./shell-channels');
@@ -57,19 +57,14 @@ async function startShell(options) {
   const handoffs = [];
   const extraAllowed = new Set();
   const allowUrl = (url) => addCapped(extraAllowed, url);
-  const shouldLog = createLogLimiter();
-  const logLimited = (partition, message) => {
-    const verdict = shouldLog(partition);
-    if (verdict === 'log') log(message);
-    else if (verdict === 'notice') log(`(${partition}) further blocked/permission lines suppressed for a minute`);
-  };
+  const logLimited = createLimitedLogger(log);
   const prepared = new WeakSet();
   const observers = (partition) => ({
     allowDevtools: !app.isPackaged,
     extraAllowed,
     onBlocked: (url) => {
       pushCapped(blocked, { partition, url });
-      logLimited(partition, `blocked request (${partition}): ${url}`);
+      logLimited(partition, `blocked request (${partition}): ${sanitizeText(url)}`); // the URL came from a page
     },
     onPermission: (decision) => {
       pushCapped(permissionDecisions, { ...decision, partition });
@@ -140,6 +135,11 @@ async function startShell(options) {
     const wc = view.webContents;
     // Superseded when a newer handoff started, the view was replaced, or the tab navigated (epoch).
     const latest = () => handoffSeq.get(tab.id) === seq && tabs.viewOf(tab.id) === view && !wc.isDestroyed() && tabs.get(tab.id)?.epoch === tab.epoch;
+    // A handoff dropped before it finished must not leave its own 'Loading...' behind (hash-only navigation fires no
+    // did-navigate that would clear it). A newer handoff owns the status once handoffSeq has moved on.
+    const abandon = () => {
+      if (handoffSeq.get(tab.id) === seq && tabs.has(tab.id) && statuses.get(tab.id)?.kind === 'loading') setStatus(tab.id, null);
+    };
     const toolName = registry.get(tab.toolId).name;
     setStatus(tab.id, { kind: 'loading', text: `Loading ${doc.name} into ${toolName}...` });
     try {
@@ -148,10 +148,10 @@ async function startShell(options) {
         : await toolIpc.grantPath(wc, doc.filePath, { dev: doc.dev, ino: doc.ino });
       await beforeInject({ tabId: tab.id, toolId: tab.toolId });
       // Re-check right before injecting: the grant (or the settle delay) may have outlived the page.
-      if (!latest() || !isTargetPage(wc.getURL(), APP_ORIGIN, tab.page)) return;
+      if (!latest() || !isTargetPage(wc.getURL(), APP_ORIGIN, tab.page)) return abandon();
       // userGesture=false: the page must not get transient user activation from us.
       const count = await wc.executeJavaScript(handoffScript([entry], adapterFor(tab.toolId)), false);
-      if (!latest()) return;
+      if (!latest()) return abandon();
       if (store.has(doc.id)) store.touch(doc.id);
       pushCapped(handoffs, Object.freeze({ tabId: tab.id, toolId: tab.toolId, docId: doc.id, count }));
       setStatus(tab.id, null);
@@ -159,6 +159,7 @@ async function startShell(options) {
       const reason = sanitizeText(err && err.message); // page-originated text: capped, no control characters
       logLimited(tab.partition, `handoff ${sanitizeText(doc.name)} -> ${tab.toolId} (tab ${tab.id}): ${reason}`);
       if (latest()) setStatus(tab.id, { kind: 'error', text: sanitizeText(`Could not open ${doc.name} in ${toolName}: ${reason}`) });
+      else abandon();
     }
   }
 
@@ -208,10 +209,7 @@ async function startShell(options) {
   // time per path: concurrent opens of the same file end in one document and one tab.
   const openDocument = createDocumentOpener({ store, recents, tabs, pushState });
 
-  /** Remove a document nothing shows any more (its last tab closed or navigated away). */
-  const releaseDocument = (docId) => {
-    if (docId && !tabs.list().some((t) => t.docId === docId)) store.remove(docId);
-  };
+  const releaseDocument = createDocumentReleaser({ store, tabs });
 
   const activeView = () => (tabs.activeId() === null ? undefined : tabs.viewOf(tabs.activeId()));
   const actions = {
@@ -224,7 +222,7 @@ async function startShell(options) {
       else {
         const previousDoc = tabs.get(active).docId;
         await tabs.navigate(active, { page: tool.path, toolId, docId: docId || previousDoc });
-        releaseDocument(previousDoc);
+        await releaseDocument(previousDoc);
       }
       return state();
     },
@@ -237,7 +235,7 @@ async function startShell(options) {
       await tabs.close(id);
       handoffSeq.delete(id);
       if (statuses.has(id)) setStatus(id, null);
-      releaseDocument(docId);
+      await releaseDocument(docId);
       await releaseSession(session.fromPartition(partition), log);
       pushState();
       return state();

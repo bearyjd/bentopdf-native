@@ -56,21 +56,43 @@ test('open-with still accepts only file arguments and file:// URLs next to refus
   assert.deepEqual(pdfPathsFromArgv(['exe', '--no-sandbox', 'https://x.example/a.pdf', '/d/a.pdf'], { cwd: '/' }), ['/d/a.pdf']);
 });
 
-test('unsafeSwitches: a packaged build refuses the test switches even with BENTO_TEST_HEADLESS=1', () => {
+test('unsafeSwitches: a packaged build refuses the test switches with BENTO_TEST_HEADLESS=1 but NO marker', () => {
   for (const arg of ['--ozone-platform=headless', '--remote-debugging-port=0', '--remote-debugging-pipe', '--user-data-dir=/tmp/p']) {
     assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, { packaged: true }), [arg], arg);
     assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, { packaged: true, secondInstance: true }), [arg], `${arg} (second instance)`);
     assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, { packaged: false }), [], `${arg} unpackaged`);
   }
   assert.deepEqual(unsafeSwitches(['exe', '--remote-debugging-port=0']), ['--remote-debugging-port=0'], 'no env argument: closed');
+  for (const arg of ['--remote-debugging-port=0', '--user-data-dir=/tmp/p']) {
+    assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, { packaged: true, testMarker: false }), [arg], `${arg} marker=false`);
+    assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, { packaged: true, testMarker: 'yes' }), [arg], `${arg} truthy non-true marker`);
+  }
+});
+
+test('unsafeSwitches: a packaged build with BENTO_TEST_HEADLESS=1 AND the marker accepts the test switches, only those', () => {
+  const packagedTest = { packaged: true, testMarker: true };
+  for (const arg of ['--ozone-platform=headless', '--remote-debugging-port=0', '--remote-debugging-pipe', '--user-data-dir=/tmp/p']) {
+    assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, packagedTest), [], arg);
+    assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, { ...packagedTest, secondInstance: true }), [], `${arg} (second instance)`);
+    assert.deepEqual(unsafeSwitches(['exe', arg], NO_ENV, packagedTest), [arg], `${arg}: marker without the env still refuses`);
+  }
+  for (const arg of ['--no-sandbox', '-remote-debugging-port=0', '--remote-debugging-address=0.0.0.0', '--js-flags=--x']) {
+    assert.deepEqual(unsafeSwitches(['exe', arg], TEST_ENV, packagedTest), [arg], `${arg} even with env and marker`);
+  }
+});
+
+test('unsafeSwitches: unpackaged behaviour is unchanged by the marker option', () => {
+  assert.deepEqual(unsafeSwitches(['exe', '--remote-debugging-port=0'], TEST_ENV, { packaged: false, testMarker: false }), []);
+  assert.deepEqual(unsafeSwitches(['exe', '--remote-debugging-port=0'], NO_ENV, { packaged: false, testMarker: true }), ['--remote-debugging-port=0']);
 });
 
 test('main.js feeds the policy the app.isPackaged-gated environment, and both launchers unset the test variables', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
-  assert.match(main, /unsafeSwitches\(process\.argv, overrides, \{ packaged: app\.isPackaged \}\)/);
-  assert.match(main, /unsafeSwitches\(argv, overrides, \{ secondInstance: true, packaged: app\.isPackaged \}\)/);
+  assert.match(main, /testMarker: app\.isPackaged && hasTestMarker\(process\.resourcesPath\)/);
+  assert.match(main, /unsafeSwitches\(process\.argv, process\.env, policyOptions\)/);
+  assert.match(main, /unsafeSwitches\(argv, process\.env, \{ \.\.\.policyOptions, secondInstance: true \}\)/);
   for (const launcher of ['linux/AppRun', 'flatpak/launcher.sh.in']) {
     const unset = fs.readFileSync(path.join(__dirname, '..', '..', 'packaging', launcher), 'utf8').split('\n').find((l) => l.startsWith('unset '));
     for (const v of ['BENTO_TEST_HEADLESS', 'BENTO_DIST', 'BENTO_TRANSPORT']) assert.match(unset, new RegExp(`\\b${v}\\b`), `${launcher} unsets ${v}`);

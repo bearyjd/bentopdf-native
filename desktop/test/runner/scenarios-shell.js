@@ -203,6 +203,121 @@ async function shellHandoffNavigated(ctx) {
   return { navigatedTo };
 }
 
+/** Park a handoff in the beforeInject seam, run `disturb(wc, tabId)` there, then report what it left behind. */
+async function runDisturbedHandoff(ctx, pdfName, disturb) {
+  const { handle, hooks } = ctx;
+  const opened = await openPdfs(ctx, [pdfName]);
+  let reached = null;
+  hooks.beforeInject = async ({ tabId }) => {
+    if (reached) return;
+    const wc = handle.tabs.viewOf(tabId).webContents;
+    reached = { tabId, epoch: handle.tabs.get(tabId).epoch };
+    await disturb(wc, tabId);
+  };
+  await mustCall(handle, `window.bentoShell.openTool('merge-pdf', ${JSON.stringify(opened.docs[0].id)})`);
+  for (let i = 0; i < 100 && !reached; i += 1) await sleep(100);
+  if (!reached) throw new Error('the handoff never reached the injection seam');
+  await sleep(4500); // longer than the settle delay a (wrongly) injected script would wait
+  const tab = handle.tabs.list().find((t) => t.id === reached.tabId);
+  const wc = handle.tabs.viewOf(tab.id).webContents;
+  const injected = await js(wc, `Array.from(document.querySelectorAll('input[type="file"]')).reduce((n, i) => n + i.files.length, 0)`);
+  const status = (await mustCall(handle, 'window.bentoShell.getState()')).tabs.find((t) => t.id === tab.id).status;
+  return { reached, tab, wc, injected, status, handoffs: handle.handoffs.length };
+}
+
+/**
+ * A hash-only navigation while the handoff waits fires no did-navigate (so nothing else clears 'Loading...'),
+ * keeps the URL on the target page (only the navigation epoch drops the handoff), and must leave no status behind.
+ */
+async function shellHandoffHashNav(ctx) {
+  const r = await runDisturbedHandoff(ctx, 'hash.pdf', async (wc) => {
+    await js(wc, `location.hash = '#moved'; true`);
+    await sleep(300);
+  });
+  const problems = [];
+  if (!r.wc.getURL().endsWith('/merge-pdf.html#moved')) problems.push(`url ${r.wc.getURL()}`);
+  if (r.status !== null) problems.push(`status left behind ${JSON.stringify(r.status)}`);
+  if (r.injected !== 0 || r.handoffs !== 0) problems.push(`stale handoff injected=${r.injected} recorded=${r.handoffs}`);
+  if (problems.length) throw new Error(problems.join(' | '));
+  return { url: r.wc.getURL() };
+}
+
+/** Same-URL reload while the handoff waits: the URL still matches, so only the navigation-epoch guard drops it. */
+async function shellHandoffReload(ctx) {
+  const r = await runDisturbedHandoff(ctx, 'reload.pdf', (wc) => new Promise((resolve) => {
+    wc.once('did-finish-load', resolve);
+    wc.reload();
+  }));
+  const problems = [];
+  if (!r.wc.getURL().endsWith('/merge-pdf.html')) problems.push(`url ${r.wc.getURL()}`);
+  if (r.tab.epoch <= r.reached.epoch) problems.push(`epoch did not move: ${r.reached.epoch} -> ${r.tab.epoch}`);
+  if (r.injected !== 0 || r.handoffs !== 0) problems.push(`the handoff meant for the old page injected=${r.injected} recorded=${r.handoffs}`);
+  if (r.status !== null) problems.push(`status ${JSON.stringify(r.status)}`);
+  if (problems.length) throw new Error(problems.join(' | '));
+  return { epoch: [r.reached.epoch, r.tab.epoch] };
+}
+
+/**
+ * Stubbed wc: the epoch does NOT move, only getURL() reports another page, so only the URL re-check
+ * before injecting can drop the handoff.
+ */
+async function shellHandoffUrlChanged(ctx) {
+  let calls = 0;
+  let stubbed = null;
+  let r;
+  try {
+    r = await runDisturbedHandoff(ctx, 'url.pdf', async (wc) => {
+      stubbed = wc;
+      wc.getURL = () => 'bento://app/split-pdf.html'; // instance property shadows the prototype method
+      const real = wc.executeJavaScript.bind(wc);
+      wc.executeJavaScript = (code, ...rest) => {
+        if (String(code).includes('handoffToInput')) calls += 1;
+        return real(code, ...rest);
+      };
+    });
+  } finally {
+    if (stubbed) {
+      delete stubbed.getURL; // restore the prototype methods even when the scenario threw
+      delete stubbed.executeJavaScript;
+    }
+  }
+  const problems = [];
+  if (r.tab.epoch !== r.reached.epoch) problems.push(`epoch moved: ${r.reached.epoch} -> ${r.tab.epoch}`);
+  if (calls !== 0 || r.injected !== 0 || r.handoffs !== 0) problems.push(`injected despite the URL change: calls=${calls} injected=${r.injected} recorded=${r.handoffs}`);
+  if (r.status !== null) problems.push(`status left behind ${JSON.stringify(r.status)}`);
+  if (problems.length) throw new Error(problems.join(' | '));
+  return { epoch: r.tab.epoch };
+}
+
+/** A page can request a huge URL: the blocked-request log line must be bounded and one line. */
+async function shellBlockedUrlLog(ctx) {
+  const { handle } = ctx;
+  const lines = [];
+  const original = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...rest) => {
+    lines.push(String(chunk));
+    return original(chunk, ...rest);
+  };
+  try {
+    await mustCall(handle, `window.bentoShell.openTool('merge-pdf', null)`);
+    const wc = handle.tabs.viewOf(handle.tabs.activeId()).webContents;
+    await wc.loadURL(`https://example.invalid/${'a'.repeat(5000)}`).catch(() => {}); // ERR_ABORTED: the request is cancelled
+    for (let i = 0; i < 50 && !lines.some((l) => l.includes('blocked request')); i += 1) await sleep(100);
+  } finally {
+    process.stderr.write = original;
+  }
+  const line = lines.find((l) => l.includes('blocked request'));
+  const problems = [];
+  if (!line) problems.push('no blocked-request log line');
+  else {
+    if (line.length > 450) problems.push(`log line is ${line.length} characters`);
+    if (!line.includes('https://example.invalid/')) problems.push(`line ${line.slice(0, 100)}`);
+    if (line.trimEnd().split('\n').length !== 1) problems.push('log line spans several lines');
+  }
+  if (problems.length) throw new Error(problems.join(' | '));
+  return { length: line.length };
+}
+
 /** A failed handoff must reach the shell UI state, and the IPC must return before the handoff ends. */
 async function shellHandoffError(ctx) {
   const { handle } = ctx;
@@ -388,7 +503,11 @@ async function shellTeardown(ctx) {
     resizeAtDestroy = win.listenerCount('resize');
     realDestroy();
   };
-  await handle.close();
+  try {
+    await handle.close();
+  } finally {
+    delete win.destroy; // drop the instance stub so the prototype method is back
+  }
   const deadline = Date.now() + 5000;
   while (contents.some((wc) => !wc.isDestroyed()) && Date.now() < deadline) await sleep(100);
   const problems = [];
@@ -400,4 +519,4 @@ async function shellTeardown(ctx) {
   return { resizeBefore, resizeAtDestroy };
 }
 
-module.exports = { shellTabs, shellHandoff, shellHandoffError, shellHandoffNavigated, shellMemcap, shellIpcReject, shellLifecycle, shellTeardown };
+module.exports = { shellTabs, shellHandoff, shellHandoffError, shellHandoffNavigated, shellHandoffHashNav, shellHandoffReload, shellHandoffUrlChanged, shellBlockedUrlLog, shellMemcap, shellIpcReject, shellLifecycle, shellTeardown };
