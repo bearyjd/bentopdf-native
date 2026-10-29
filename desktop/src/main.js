@@ -21,10 +21,11 @@ const { startShell } = require('./shell/shell-app');
 const { buildShellMenuTemplate } = require('./shell/shell-menu');
 const { unsafeSwitches } = require('./argv-policy');
 const { pdfPathsFromArgv } = require('./open-file');
+const { DEFAULT_TRANSPORT, startKindFor } = require('./start-mode');
 
 // Decided by experiment, see docs/m2-findings.md. The tabbed shell (M3a) needs the
-// scheme; BENTO_TRANSPORT=http (dev only) still starts the single-window M2 app.
-const DEFAULT_TRANSPORT = 'scheme';
+// scheme. BENTO_TRANSPORT=http is a TEST-ONLY harness (the single-window M2 app on
+// loopback, unpackaged runs only): it is not the product and has no tabs (start-mode.js).
 
 // Dev overrides only: a packaged app must not be redirected by its environment.
 // Packaged, the bundle is an extraResource outside app.asar (docs/desktop-linux.md).
@@ -116,7 +117,7 @@ if (refused.length > 0) {
   app
     .whenReady()
     .then(async () => {
-      if (transport === 'scheme') {
+      if (startKindFor(transport) === 'shell') {
         let menuActions = null;
         const onStateChanged = (state) => menuActions && installShellMenu(menuActions, state.recents);
         const started = await startShell({ distDir, homeTab: waiting.length === 0, onStateChanged });
@@ -124,6 +125,7 @@ if (refused.length > 0) {
         installShellMenu(menuActions, started.recents.list());
         handle = started;
       } else {
+        log('BENTO_TRANSPORT=http: TEST-ONLY single-window harness, not the tabbed shell');
         installMenu();
         handle = await startApp({ distDir, transport });
       }

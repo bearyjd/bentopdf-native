@@ -32,7 +32,7 @@ async function runOne(name) {
     distDir,
     show: false,
     homeTab: false,
-    maxLive: scenarios[name].maxLive,
+    liveBudget: scenarios[name].liveBudget,
     dialogs: {
       showOpenDialog: async () => ({ canceled: false, filePaths: dialogState.next }),
       showSaveDialog: async () => ({ canceled: true }),

@@ -7,6 +7,13 @@ const { fileURLToPath } = require('node:url');
 const MAX_OPEN_ARGS = 16;
 const MAX_PATH_LENGTH = 4096;
 
+/**
+ * UNC / network-share prefixes (`\\host\share`, `//host/share`, `\\?\UNC\...`). Refused on
+ * every platform: reading one can leak credentials (NTLM) or hang on a dead server, and POSIX
+ * treats a leading `//` as an ordinary path that other code would normalise away.
+ */
+const hasNetworkPrefix = (value) => typeof value === 'string' && /^[\\/]{2}/.test(value);
+
 function localPathOfFileUrl(url) {
   try {
     return fileURLToPath(url); // throws for a non-local host
@@ -34,7 +41,7 @@ function pdfPathsFromArgv(argv, { cwd = process.cwd(), defaultApp = false } = {}
     if ((!optionsEnded && arg.startsWith('-')) || arg.includes('\0')) continue;
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(arg) && !arg.startsWith('file://')) continue; // other URL schemes
     const local = arg.startsWith('file://') ? localPathOfFileUrl(arg) : arg; // %U launchers pass file:// URLs
-    if (local === null || local.includes('\0') || path.extname(local).toLowerCase() !== '.pdf') continue;
+    if (local === null || local.includes('\0') || hasNetworkPrefix(local) || path.extname(local).toLowerCase() !== '.pdf') continue;
     found.push(path.resolve(cwd, local));
     if (found.length >= MAX_OPEN_ARGS) break;
   }
@@ -55,8 +62,10 @@ const hasPdfMagic = (bytes) => bytes.length >= PDF_MAGIC.length && Buffer.from(b
  * is refused by the magic-byte check, and the grant never names the link.
  */
 async function validateOpenPath(filePath, maxBytes) {
+  if (hasNetworkPrefix(filePath)) throw new Error('network paths are not allowed');
   if (path.extname(filePath).toLowerCase() !== '.pdf') throw new Error('not a .pdf file');
   const resolved = await fs.promises.realpath(filePath);
+  if (hasNetworkPrefix(resolved)) throw new Error('network paths are not allowed');
   const handle = await fs.promises.open(resolved, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
   try {
     const stat = await handle.stat();
@@ -71,4 +80,4 @@ async function validateOpenPath(filePath, maxBytes) {
   }
 }
 
-module.exports = { pdfPathsFromArgv, validateOpenPath, hasPdfMagic, MAX_OPEN_ARGS };
+module.exports = { pdfPathsFromArgv, validateOpenPath, hasPdfMagic, hasNetworkPrefix, MAX_OPEN_ARGS };

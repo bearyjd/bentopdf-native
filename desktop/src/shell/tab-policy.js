@@ -1,27 +1,30 @@
 'use strict';
 
-/**
- * Live-view memory cap. A tab's view (a whole renderer: one LibreOffice run
- * alone is ~1.7 GiB RSS, docs/m2-findings.md) is "live" until discarded; a
- * discarded tab keeps its tool and document id and is reloaded on activation.
- */
-const DEFAULT_MAX_LIVE = 3;
+const { LIVE_VIEW_BUDGET, weightOfTool } = require('./live-budget');
 
 /**
- * Which live tabs to discard so that at most `maxLive` stay alive. The active
- * tab is never discarded; the least recently active background tabs go first.
- * Pure: takes `[{id, live, lastActive}]`, returns ids, mutates nothing.
+ * Live-view limit. A tab's view (a whole renderer) is "live" until discarded;
+ * a discarded tab keeps its tool and document id and is reloaded on
+ * activation. The limit is a weighted slot budget (live-budget.js), not a
+ * measurement of memory.
+ *
+ * Which live tabs to discard so that the live weights sum to at most `budget`.
+ * The active tab is never discarded (it may alone exceed the budget); the
+ * least recently active background tabs go first. Pure: takes
+ * `[{id, live, lastActive, toolId?}]`, returns ids, mutates nothing.
  */
-function tabsToDiscard(tabs, { activeId, maxLive = DEFAULT_MAX_LIVE } = {}) {
-  if (!Number.isInteger(maxLive) || maxLive < 1) throw new RangeError('maxLive must be an integer >= 1');
+function tabsToDiscard(tabs, { activeId, budget = LIVE_VIEW_BUDGET, weightOf = (t) => weightOfTool(t.toolId) } = {}) {
+  if (!Number.isInteger(budget) || budget < 1) throw new RangeError('budget must be an integer >= 1');
   const live = tabs.filter((t) => t.live);
-  const excess = live.length - maxLive;
-  if (excess <= 0) return [];
-  return live
-    .filter((t) => t.id !== activeId)
-    .sort((a, b) => a.lastActive - b.lastActive || a.id - b.id)
-    .slice(0, excess)
-    .map((t) => t.id);
+  let total = live.reduce((sum, t) => sum + weightOf(t), 0);
+  const discard = [];
+  const candidates = live.filter((t) => t.id !== activeId).sort((a, b) => a.lastActive - b.lastActive || a.id - b.id);
+  for (const tab of candidates) {
+    if (total <= budget) break;
+    discard.push(tab.id);
+    total -= weightOf(tab);
+  }
+  return discard;
 }
 
-module.exports = { tabsToDiscard, DEFAULT_MAX_LIVE };
+module.exports = { tabsToDiscard, LIVE_VIEW_BUDGET };

@@ -34,6 +34,11 @@ function createViewAdapter({ win, origin, prepare, log, allowUrl, onNavigated = 
   win.on('resize', relayout);
 
   return Object.freeze({
+    /** Stop reacting to the window (call after every view is destroyed, before the window is). */
+    dispose() {
+      win.removeListener('resize', relayout);
+      tabOf.clear();
+    },
     create(tab) {
       prepare(session.fromPartition(tab.partition), tab.partition);
       const view = new WebContentsView({

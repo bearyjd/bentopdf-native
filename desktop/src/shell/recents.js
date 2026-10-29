@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { hasNetworkPrefix } = require('../open-file');
 
 const MAX_RECENTS = 10;
 const MAX_FILE_BYTES = 64 * 1024;
@@ -15,10 +16,22 @@ function isPlausiblePath(value) {
     value.length > 0 &&
     value.length <= MAX_PATH_LENGTH &&
     !value.includes('\0') &&
+    !hasNetworkPrefix(value) &&
     path.isAbsolute(value) &&
     path.extname(value).toLowerCase() === '.pdf'
   );
 }
+
+const GONE_CODES = new Set(['ENOENT', 'ENOTDIR', 'ELOOP']);
+// Thrown by validateOpenPath / the store when the file is there but is not an acceptable document.
+const INVALID_MESSAGE = /^(not a \.pdf file|not a regular file|file too large|not a PDF|not an absolute path|network paths)/;
+
+/**
+ * True only when opening a recent failed for a CONFIRMED reason (the file is
+ * gone, or it is not an acceptable PDF). Anything else (EACCES, EIO, EBUSY,
+ * EMFILE, a network hiccup, an unexpected error) may be transient: the entry stays.
+ */
+const isPermanentOpenFailure = (err) => Boolean(err) && (GONE_CODES.has(err.code) || INVALID_MESSAGE.test(String(err.message)));
 
 /**
  * Parse the recents file defensively: it lives in userData and is treated as
@@ -105,4 +118,4 @@ function createRecents({ file, max = MAX_RECENTS, onError = () => {} }) {
   return Object.freeze({ add, remove, pathOf, list });
 }
 
-module.exports = { createRecents, parseRecents, isPlausiblePath, MAX_RECENTS };
+module.exports = { createRecents, parseRecents, isPlausiblePath, isPermanentOpenFailure, MAX_RECENTS };

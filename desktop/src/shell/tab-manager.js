@@ -1,6 +1,6 @@
 'use strict';
 
-const { tabsToDiscard, DEFAULT_MAX_LIVE } = require('./tab-policy');
+const { tabsToDiscard, LIVE_VIEW_BUDGET } = require('./tab-policy');
 
 const DEFAULT_PAGE = '/index.html';
 
@@ -17,12 +17,15 @@ const partitionFor = (id) => `bento-tab-${id}`;
 /**
  * Tabs of the one shell window. Each tab owns one view (an Electron
  * WebContentsView in its own partition, created by the injected `views`
- * adapter, so this module stays testable without Electron). At most `maxLive`
- * views stay alive; a discarded tab keeps `page`/`toolId`/`docId` and gets a
- * fresh view, a reload and `onLoaded` (document handoff) when activated.
+ * adapter, so this module stays testable without Electron). The live views
+ * together weigh at most `liveBudget` slots (tab-policy.js); a discarded tab
+ * keeps `page`/`toolId`/`docId` and gets a fresh view, a reload and `onLoaded`
+ * (document handoff) when activated. `onLoaded` is started once the page has
+ * loaded but NOT awaited: a slow handoff must not block activate/open/navigate
+ * (its failures are its own to report; a rejection lands in `onError`).
  * Tab records are frozen and replaced, never mutated.
  */
-function createTabManager({ views, maxLive = DEFAULT_MAX_LIVE, onLoaded = async () => {}, onChange = () => {}, onError = () => {} }) {
+function createTabManager({ views, liveBudget = LIVE_VIEW_BUDGET, onLoaded = async () => {}, onChange = () => {}, onError = () => {} }) {
   let tabs = new Map(); // id -> frozen Tab (insertion order = strip order)
   const live = new Map(); // id -> view
   let activeId = null;
@@ -39,9 +42,16 @@ function createTabManager({ views, maxLive = DEFAULT_MAX_LIVE, onLoaded = async 
     const view = live.get(tab.id);
     try {
       await views.load(view, tab.page);
-      if (live.get(tab.id) === view) await onLoaded(tabs.get(tab.id), view);
     } catch (err) {
       onError(err, tab);
+      return;
+    }
+    if (live.get(tab.id) !== view) return; // discarded, closed or replaced while loading
+    const current = tabs.get(tab.id);
+    try {
+      Promise.resolve(onLoaded(current, view)).catch((err) => onError(err, current));
+    } catch (err) {
+      onError(err, current);
     }
   }
 
@@ -54,7 +64,7 @@ function createTabManager({ views, maxLive = DEFAULT_MAX_LIVE, onLoaded = async 
   }
 
   function enforceCap() {
-    for (const id of tabsToDiscard([...tabs.values()], { activeId, maxLive })) discard(id);
+    for (const id of tabsToDiscard([...tabs.values()], { activeId, budget: liveBudget })) discard(id);
   }
 
   function ensureLive(tab) {
@@ -93,8 +103,10 @@ function createTabManager({ views, maxLive = DEFAULT_MAX_LIVE, onLoaded = async 
     const tab = tabs.get(id);
     if (!tab) throw new Error('unknown tab');
     const next = set({ ...tab, page, toolId, docId });
+    enforceCap(); // the new tool may weigh more than the old one
     if (live.has(id)) await loadInto(next);
     else if (id === activeId) await activate(id);
+    onChange();
   }
 
   /** The page navigated itself (e.g. a link to another tool): remember it for reloads. */
@@ -119,6 +131,13 @@ function createTabManager({ views, maxLive = DEFAULT_MAX_LIVE, onLoaded = async 
     onChange();
   }
 
+  /** Window teardown: destroy every view and forget every tab. No callbacks fire. */
+  function closeAll() {
+    for (const id of [...live.keys()]) discard(id);
+    tabs = new Map();
+    activeId = null;
+  }
+
   /** Cycle through the strip order; `step` is +1 or -1. */
   async function cycle(step) {
     const ids = [...tabs.keys()];
@@ -135,6 +154,7 @@ function createTabManager({ views, maxLive = DEFAULT_MAX_LIVE, onLoaded = async 
     navigate,
     recordPage,
     close,
+    closeAll,
     next: () => cycle(1),
     previous: () => cycle(-1),
     list,

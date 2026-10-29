@@ -181,3 +181,13 @@ test('About text states the licence, the no-warranty line and the corresponding-
   assert.ok(text.includes(SOURCE_URL));
   assert.match(text, /Unofficial/);
 });
+
+test('network paths (UNC, //host) are refused on every platform: validateOpenPath and argv', async () => {
+  const { hasNetworkPrefix } = require('../src/open-file');
+  for (const p of ['\\\\host\\share\\a.pdf', '//host/share/a.pdf', '\\\\?\\UNC\\h\\s\\a.pdf', '/\\host/a.pdf']) {
+    assert.equal(hasNetworkPrefix(p), true, p);
+    await assert.rejects(validateOpenPath(p, 1024), /network paths are not allowed/, p);
+  }
+  for (const p of ['/home/u/a.pdf', 'C:\\docs\\a.pdf', 'a.pdf', '', null]) assert.equal(hasNetworkPrefix(p), false, String(p));
+  assert.deepEqual(pdfPathsFromArgv(['app', '//host/share/a.pdf', '\\\\host\\s\\b.pdf', '/ok/c.pdf'], { cwd: '/' }), ['/ok/c.pdf']);
+});

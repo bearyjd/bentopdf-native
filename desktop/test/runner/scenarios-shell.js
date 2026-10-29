@@ -8,6 +8,7 @@ const path = require('node:path');
 const { WebContentsView } = require('electron');
 const { secureWebPreferences } = require('../../src/security');
 const { SHELL_PARTITION } = require('../../src/shell/shell-app');
+const brand = require('../../brand.json');
 
 const SHELL_PRELOAD = path.join(__dirname, '..', '..', 'src', 'shell', 'shell-preload.js');
 const TOOL_PRELOAD = path.join(__dirname, '..', '..', 'src', 'preload.js');
@@ -143,17 +144,63 @@ const fileListed = (name) => `(() => { const t = document.querySelector('#file-l
 
 async function shellHandoff(ctx) {
   const { handle } = ctx;
-  await openPdfs(ctx, ['merge-me.pdf']);
-  const state = await mustCall(handle, `window.bentoShell.openTool('merge-pdf', null)`);
+  // TWO documents open; the tool is opened for the one that is NOT the active tab's.
+  const opened = await openPdfs(ctx, ['merge-me.pdf', 'other.pdf']);
+  const id = Object.fromEntries(opened.docs.map((d) => [d.name, d.id]));
+  const before = handle.store.get(id['merge-me.pdf']).lastUsed;
+  const started = Date.now();
+  const state = await mustCall(handle, `window.bentoShell.openTool('merge-pdf', ${JSON.stringify(id['merge-me.pdf'])})`);
+  const returnedAfterMs = Date.now() - started;
   const tab = state.tabs.find((t) => t.active);
   if (tab.toolId !== 'merge-pdf' || tab.docName !== 'merge-me.pdf') throw new Error(`tab ${JSON.stringify(tab)}`);
   const wc = handle.tabs.viewOf(tab.id).webContents;
   const listed = await waitIn(wc, fileListed('merge-me.pdf'), 20000, 'Merge PDF lists merge-me.pdf');
+  const problems = [];
+  if (await js(wc, fileListed('other.pdf'))) problems.push('the OTHER document was handed to the tool');
+  for (let i = 0; i < 100 && handle.handoffs.length < 1; i += 1) await sleep(100); // the record follows the page's own list
+  await sleep(300);
   const handoffs = handle.handoffs.slice();
-  if (handoffs.length !== 1 || handoffs[0].count !== 1) throw new Error(`handoffs ${JSON.stringify(handoffs)}`);
-  return { listed, handoffs, network: assertNoExternalRequests(ctx) };
+  if (handoffs.length !== 1 || handoffs[0].count !== 1) problems.push(`handoffs ${JSON.stringify(handoffs)}`);
+  if (handoffs[0] && handoffs[0].docId !== id['merge-me.pdf']) problems.push(`handed off doc ${handoffs[0].docId}, wanted ${id['merge-me.pdf']}`);
+  if (!(handle.store.get(id['merge-me.pdf']).lastUsed > before)) problems.push('store.touch not called by the handoff');
+  if (handle.store.has(id['other.pdf'])) problems.push('document no tab shows any more was not released');
+  const after = await mustCall(handle, 'window.bentoShell.getState()');
+  if (after.tabs.some((t) => t.status)) problems.push(`status left behind ${JSON.stringify(after.tabs.map((t) => t.status))}`);
+  if (problems.length) throw new Error(problems.join(' | '));
+  return { listed, handoffs, returnedAfterMs, network: assertNoExternalRequests(ctx) };
 }
 
+/** A failed handoff must reach the shell UI state, and the IPC must return before the handoff ends. */
+async function shellHandoffError(ctx) {
+  const { handle } = ctx;
+  const file = writeMinimalPdf(path.join(ctx.workDir, 'swap.pdf'), 'original');
+  ctx.dialogState.next = [file];
+  await mustCall(handle, 'window.bentoShell.openFileDialog()');
+  // Replace the file behind the same path (new inode): the grant must refuse it.
+  const replacement = writeMinimalPdf(path.join(ctx.workDir, 'swap.tmp'), 'replacement with another inode');
+  fs.renameSync(replacement, file);
+  const started = Date.now();
+  await mustCall(handle, `window.bentoShell.openTool('merge-pdf', null)`);
+  const returnedAfterMs = Date.now() - started;
+  const deadline = Date.now() + 20000;
+  let status = null;
+  while (Date.now() < deadline) {
+    const tab = (await mustCall(handle, 'window.bentoShell.getState()')).tabs.find((t) => t.active);
+    status = tab.status;
+    if (status && status.kind === 'error') break;
+    await sleep(200);
+  }
+  const problems = [];
+  if (!status || status.kind !== 'error' || !status.text.includes('file changed since it was opened')) problems.push(`status ${JSON.stringify(status)}`);
+  if (handle.handoffs.length !== 0) problems.push('a handoff was recorded for a refused grant');
+  // The shell page itself must show it (the status line is what a person sees).
+  const shown = await waitIn(handle.window.webContents, `document.getElementById('doc-status').textContent`, 5000, 'doc-status line');
+  if (!shown.includes('file changed')) problems.push(`doc-status line ${shown}`);
+  if (problems.length) throw new Error(problems.join(' | '));
+  return { status, shown, returnedAfterMs };
+}
+
+/** Live-view limit (a weighted slot budget; the default weight of an ordinary tab is 1). */
 async function shellMemcap(ctx) {
   const { handle } = ctx;
   await openPdfs(ctx, ['a.pdf']);
@@ -175,10 +222,26 @@ async function shellMemcap(ctx) {
   const listed = await waitIn(reloaded, fileListed('a.pdf'), 20000, 'a.pdf handed off again after reload');
   const after = await mustCall(handle, 'window.bentoShell.getState()');
   if (after.tabs.filter((t) => t.live).length !== 2) problems.push('cap not kept after activation');
+
+  // The lockdown must still hold on the partition AFTER discard-and-reload (the session object is reused).
+  const partition = handle.tabs.get(first).partition;
+  const refusals = () => handle.permissionDecisions.filter((d) => d.partition === partition && d.permission === 'notifications' && d.granted === false).length;
+  const refusalsBefore = refusals();
+  const facts = await viewFacts(reloaded);
+  if (facts.crossOriginIsolated !== true || facts.coop !== 'same-origin' || facts.coep !== 'require-corp' || !facts.csp.startsWith("default-src 'self'")) problems.push(`reloaded view headers ${JSON.stringify(facts)}`);
+  if (facts.notification !== 'denied' || refusals() <= refusalsBefore) problems.push('permission lock not applied after reload');
+  if (facts.shellBridge !== 'undefined' || facts.nodeLeak !== 'undefined,undefined,undefined') problems.push('reloaded view bridge/node leak');
+  const network = assertNoExternalRequests(ctx);
+  const blockedBefore = handle.blocked.length;
+  const external = await reloaded.loadURL('https://example.invalid/').then(() => 'LOADED', (e) => e.code || e.message);
+  // ERR_ABORTED: the failure handler replaces the blocked page with its error page; the proof is the blocked record.
+  if (external === 'LOADED' || !handle.blocked.slice(blockedBefore).some((b) => b.partition === partition && b.url.startsWith('https://example.invalid'))) {
+    problems.push(`external request after reload: ${external}`);
+  }
   if (problems.length) throw new Error(problems.join(' | '));
-  return { first, liveAfterOpen: live, listed, handoffs: handle.handoffs.length, network: assertNoExternalRequests(ctx) };
+  return { first, liveAfterOpen: live, listed, handoffs: handle.handoffs.length, network, lockdownAfterReload: { facts, external } };
 }
-shellMemcap.maxLive = 2;
+shellMemcap.liveBudget = 2;
 
 /** A view the shell did not create, with a chosen preload and partition (an attacker who got the "other" bridge). */
 async function rogueView(partition, preload, url) {
@@ -194,6 +257,14 @@ async function shellIpcReject(ctx) {
   const out = {};
   out.positive = (await shellCall(handle, 'window.bentoShell.listTools().then((t) => t.length)')).value;
   out.toolViewHasShellBridge = await js(handle.tabs.viewOf(tab.id).webContents, 'typeof window.bentoShell');
+
+  // Native dialogs belong to the ACTIVE tab only: a hidden background tab gets nothing.
+  await openPdfs(ctx, ['y.pdf']); // tab 2 is now active, tab 1 is a hidden background tab
+  const background = handle.tabs.viewOf(tab.id).webContents;
+  const foreground = handle.tabs.viewOf(handle.tabs.activeId()).webContents;
+  out.dialogBackgroundOpen = await js(background, `window.bentoDesktop.openFile().then(() => 'ALLOWED', (e) => e.message)`);
+  out.dialogBackgroundSave = await js(background, `window.bentoDesktop.saveFile('a.pdf', new Uint8Array(1)).then(() => 'ALLOWED', (e) => e.message)`);
+  out.dialogActiveOpen = await js(foreground, `window.bentoDesktop.openFile().then((r) => 'OK:' + r.length, (e) => e.message)`);
 
   const views = [];
   try {
@@ -222,6 +293,8 @@ async function shellIpcReject(ctx) {
   const refused = (v) => typeof v === 'string' && v.includes('untrusted sender');
   const bad = [];
   if (!(out.positive > 100)) bad.push('positive control');
+  for (const key of ['dialogBackgroundOpen', 'dialogBackgroundSave']) if (!String(out[key]).includes('only available to the active tab')) bad.push(`${key}: ${out[key]}`);
+  if (out.dialogActiveOpen !== 'OK:1') bad.push(`dialogActiveOpen: ${out.dialogActiveOpen}`);
   if (out.toolViewHasShellBridge !== 'undefined') bad.push('tool view has bentoShell');
   for (const key of ['shellIpcFromToolOrigin', 'shellIpcFromSecondShellPage', 'toolIpcFromShellOrigin', 'toolReadFromShellOrigin']) {
     if (!refused(out[key])) bad.push(`${key}: ${out[key]}`);
@@ -231,4 +304,67 @@ async function shellIpcReject(ctx) {
   return out;
 }
 
-module.exports = { shellTabs, shellHandoff, shellMemcap, shellIpcReject };
+/** Documents are freed, concurrent opens do not duplicate, closed tabs' sessions are emptied, the title is the brand. */
+async function shellLifecycle(ctx) {
+  const { handle } = ctx;
+  const problems = [];
+  const file = writeMinimalPdf(path.join(ctx.workDir, 'same.pdf'), 'same');
+  await Promise.all([handle.openPath(file), handle.openPath(file), handle.openPath(file)]);
+  if (handle.store.list().length !== 1 || handle.tabs.list().length !== 1) problems.push(`concurrent opens: ${handle.store.list().length} documents, ${handle.tabs.list().length} tabs`);
+  await mustCall(handle, `window.bentoShell.closeTab(${handle.tabs.activeId()})`);
+  if (handle.store.list().length !== 0) problems.push('document kept after its last tab closed');
+
+  // 33 distinct PDFs opened and closed one after another: the old store refused the 33rd forever.
+  for (let i = 0; i < 33; i += 1) {
+    const doc = await handle.openPath(writeMinimalPdf(path.join(ctx.workDir, `many-${i}.pdf`), String(i)));
+    const tab = handle.tabs.list().find((t) => t.docId === doc.id);
+    if (!tab) throw new Error(`no tab for document ${i}`);
+    await mustCall(handle, `window.bentoShell.closeTab(${tab.id})`);
+    if (handle.store.has(doc.id)) problems.push(`document ${i} not released`);
+  }
+  if (handle.store.list().length !== 0 || handle.tabs.list().length !== 0) problems.push('documents or tabs left over');
+
+  // A closed tab's session is emptied (best effort; Electron cannot destroy a Session).
+  const opened = await openPdfs(ctx, ['storage.pdf']);
+  const tab = handle.tabs.get(opened.activeTabId);
+  await js(handle.tabs.viewOf(tab.id).webContents, `localStorage.setItem('k', 'secret'); true`);
+  await mustCall(handle, `window.bentoShell.closeTab(${tab.id})`);
+  const probe = await rogueView(tab.partition, TOOL_PRELOAD, `${handle.origin}/index.html`);
+  try {
+    const left = await js(probe.webContents, `localStorage.getItem('k')`);
+    if (left !== null) problems.push(`closed tab's localStorage survived: ${left}`);
+  } finally {
+    probe.webContents.close();
+  }
+
+  if (handle.window.getTitle() !== brand.productName) problems.push(`window title ${handle.window.getTitle()}`);
+  if (problems.length) throw new Error(problems.join(' | '));
+  return { title: handle.window.getTitle() };
+}
+
+/** Closing the shell destroys every tab's WebContents and removes the resize listener before the window goes. */
+async function shellTeardown(ctx) {
+  const { handle } = ctx;
+  await openPdfs(ctx, ['t1.pdf', 't2.pdf', 't3.pdf']);
+  const contents = handle.tabs.list().map((t) => handle.tabs.viewOf(t.id).webContents);
+  const win = handle.window;
+  const resizeBefore = win.listenerCount('resize');
+  let resizeAtDestroy = null;
+  const realDestroy = win.destroy.bind(win);
+  win.destroy = () => {
+    resizeAtDestroy = win.listenerCount('resize');
+    realDestroy();
+  };
+  await handle.close();
+  const deadline = Date.now() + 5000;
+  while (contents.some((wc) => !wc.isDestroyed()) && Date.now() < deadline) await sleep(100);
+  const problems = [];
+  if (contents.length !== 3) problems.push(`expected 3 tab views, saw ${contents.length}`);
+  if (contents.some((wc) => !wc.isDestroyed())) problems.push('a tab WebContents outlived the window teardown');
+  if (!(resizeBefore > 0) || resizeAtDestroy !== 0) problems.push(`resize listeners: ${resizeBefore} before, ${resizeAtDestroy} when the window was destroyed`);
+  if (!win.isDestroyed()) problems.push('window not destroyed');
+  if (problems.length) throw new Error(problems.join(' | '));
+  return { resizeBefore, resizeAtDestroy };
+}
+
+module.exports = { shellTabs, shellHandoff, shellHandoffError, shellMemcap, shellIpcReject, shellLifecycle, shellTeardown };

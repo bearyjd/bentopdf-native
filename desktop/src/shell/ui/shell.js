@@ -33,7 +33,7 @@
           el('button', {
             className: tab.live ? 'title' : 'title discarded',
             role: 'tab',
-            title: tab.live ? tabTitle(tab) : `${tabTitle(tab)} (unloaded to save memory; reloads when selected)`,
+            title: tab.live ? tabTitle(tab) : `${tabTitle(tab)} (unloaded by the live-view limit; reloads when selected)`,
             textContent: tabTitle(tab),
             onclick: () => run(shell.switchTab(tab.id)),
           }),
@@ -69,8 +69,18 @@
     if (shown.length === 0) $('tools').replaceChildren(el('p', { className: 'muted', textContent: 'No tool matches.' }));
   }
 
+  // Progress / failure of handing the active tab's document to its tool (from the main process).
+  function renderDocStatus(state) {
+    const active = state.tabs.find((t) => t.active);
+    const status = active && active.status;
+    const line = $('doc-status');
+    line.textContent = status ? status.text : '';
+    line.className = status ? status.kind : '';
+  }
+
   const render = (state) => {
     renderTabs(state);
+    renderDocStatus(state);
     renderRecents(state);
   };
 

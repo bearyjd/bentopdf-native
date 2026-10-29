@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>BentoPDF</title>
+  <title>Shell</title><!-- the window title is the brand name, set by the main process (shell-app.js) -->
   <link rel="stylesheet" href="shell.css">
   <script src="shell.js" defer></script>
 </head>
@@ -22,7 +22,8 @@
   </aside>
   <main id="content">
     <p id="empty">Open a PDF (Ctrl+O) or pick a tool on the left.</p>
-    <p id="status" role="status"></p>
+    <p id="doc-status" role="status"></p>
+    <p id="status" role="alert"></p>
   </main>
 </body>
 </html>

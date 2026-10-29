@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { test, before, after } = require('node:test');
 const { createDocumentStore } = require('../src/shell/document-store');
-const { createRecents, parseRecents } = require('../src/shell/recents');
+const { createRecents, parseRecents, isPlausiblePath, isPermanentOpenFailure } = require('../src/shell/recents');
 
 let dir;
 const PDF = Buffer.from('%PDF-1.4\n%fixture\n');
@@ -51,9 +51,9 @@ test('store: refuses hostile paths (relative, NUL, non-pdf, fake pdf, directory,
 test('store: size cap and document cap', async () => {
   const small = createDocumentStore({ validate: (p) => require('../src/open-file').validateOpenPath(p, 4) });
   await assert.rejects(small.addFromPath(path.join(dir, 'a.pdf')), /too large/);
-  const one = createDocumentStore({ maxDocs: 1 });
+  const one = createDocumentStore({ maxDocs: 1, inUse: () => true });
   await one.addFromPath(path.join(dir, 'a.pdf'));
-  await assert.rejects(one.addFromPath(path.join(dir, 'b.pdf')), /too many/);
+  await assert.rejects(one.addFromPath(path.join(dir, 'b.pdf')), /too many open documents \(max 1\); close a tab first/);
   await one.addFromPath(path.join(dir, 'a.pdf')); // re-open of the same file is not a new document
 });
 
@@ -126,4 +126,83 @@ test('recents: oversized or non-regular file is ignored, not trusted', () => {
   assert.equal(createRecents({ file: big, onError: (e) => errors.push(e) }).list().length, 0);
   assert.equal(errors.length, 1);
   assert.equal(createRecents({ file: path.join(dir, 'folder.pdf') }).list().length, 0);
+});
+
+// ---- review fixes ----
+
+test('store: opening and releasing 33 distinct PDFs works (documents are freed, nothing is stuck at the cap)', async () => {
+  const store = createDocumentStore();
+  for (let i = 0; i < 33; i += 1) {
+    const file = path.join(dir, `many-${i}.pdf`);
+    fs.writeFileSync(file, PDF);
+    const doc = await store.addFromPath(file);
+    assert.equal(store.remove(doc.id), true);
+  }
+  assert.equal(store.list().length, 0);
+  assert.equal(store.remove('gone'), false);
+});
+
+test('store: when full, the least recently used document NOT in use is evicted; documents in use are never evicted', async () => {
+  let t = 0;
+  const inUse = new Set();
+  const store = createDocumentStore({ maxDocs: 2, now: () => (t += 1), inUse: (id) => inUse.has(id) });
+  const a = await store.addFromPath(path.join(dir, 'a.pdf'));
+  const b = await store.addFromPath(path.join(dir, 'b.pdf'));
+  inUse.add(a.id); // a is the older one but shown in a tab
+  const c = await store.addFromPath(path.join(dir, 'many-0.pdf'));
+  assert.equal(store.has(a.id), true, 'in-use document survives');
+  assert.equal(store.has(b.id), false, 'unused LRU document evicted');
+  assert.equal(store.has(c.id), true);
+  inUse.add(c.id);
+  await assert.rejects(store.addFromPath(path.join(dir, 'many-1.pdf')), /close a tab first/);
+});
+
+test('store: file identity (dev/ino), not only the path, decides whether a file is the same document', async () => {
+  let ino = 1;
+  const validate = async () => ({ size: 10, filePath: '/docs/x.pdf', dev: 7, ino });
+  const store = createDocumentStore({ validate });
+  const first = await store.addFromPath('/docs/x.pdf');
+  const same = await store.addFromPath('/docs/x.pdf');
+  assert.equal(same.id, first.id, 'same path and same inode: same document');
+  ino = 2; // the file was replaced behind the same path
+  const replaced = await store.addFromPath('/docs/x.pdf');
+  assert.notEqual(replaced.id, first.id, 'same path but another file: a new document');
+  assert.equal(store.get(first.id).ino, 1, 'the old record keeps the identity it was validated with');
+  assert.equal(store.list().length, 2);
+});
+
+test('store: touch moves a document to the front of the most-recently-used order and rejects unknown ids', async () => {
+  let t = 0;
+  const store = createDocumentStore({ now: () => (t += 1) });
+  const a = await store.addFromPath(path.join(dir, 'a.pdf'));
+  await store.addFromPath(path.join(dir, 'b.pdf'));
+  assert.equal(store.list()[0].name, 'b.pdf');
+  store.touch(a.id);
+  assert.equal(store.list()[0].name, 'a.pdf');
+  assert.throws(() => store.touch('nope'), /unknown document/);
+});
+
+test('network paths (UNC and //host) are refused by the store and recents on every platform', async () => {
+  const store = createDocumentStore({ validate: async () => assert.fail('must be refused before validation') });
+  for (const p of ['\\\\server\\share\\a.pdf', '//server/share/a.pdf', '\\\\?\\UNC\\server\\share\\a.pdf', '/\\server/a.pdf']) {
+    await assert.rejects(store.addFromPath(p), /network paths/, p);
+    assert.equal(isPlausiblePath(p), false, p);
+  }
+  assert.equal(isPlausiblePath('/home/u/a.pdf'), true);
+  assert.deepEqual(parseRecents(JSON.stringify({ recents: [{ path: '//server/a.pdf' }, { path: '\\\\h\\s\\b.pdf' }, { path: '/ok/c.pdf' }] })), ['/ok/c.pdf']);
+  const recents = createRecents({ file: path.join(dir, 'unc-recents.json') });
+  recents.add('//server/share/a.pdf');
+  assert.deepEqual(recents.list(), []);
+});
+
+test('openRecent failure classes: only a confirmed missing/invalid file is permanent; transient errors are not', () => {
+  const coded = (code) => Object.assign(new Error(code), { code });
+  for (const e of [coded('ENOENT'), coded('ENOTDIR'), coded('ELOOP'), new Error('not a .pdf file'), new Error('not a PDF (missing %PDF- header)'),
+    new Error('not a regular file'), new Error('file too large'), new Error('network paths are not allowed')]) {
+    assert.equal(isPermanentOpenFailure(e), true, e.message);
+  }
+  for (const e of [coded('EACCES'), coded('EIO'), coded('EBUSY'), coded('EMFILE'), coded('ETIMEDOUT'), new Error('something odd'),
+    new Error('too many open documents (max 32); close a tab first'), null, undefined]) {
+    assert.equal(isPermanentOpenFailure(e), false, String(e && e.message));
+  }
 });

@@ -32,4 +32,30 @@ function prepareSession(ses, { prepared, rootReal, headers, host = 'app', onBloc
   return origin;
 }
 
-module.exports = { prepareSession, SHELL_HEADERS, SHELL_HOST };
+/**
+ * Best-effort release of a closed tab's session. Electron cannot destroy a
+ * Session: `session.fromPartition(name)` keeps the object (and the protocol
+ * handler and lockdown we registered on it) for the life of the process, so
+ * what we can do is empty it: storage, HTTP cache, DNS cache, auth cache and
+ * open connections. Each step is independent; a failure is logged, never thrown.
+ */
+async function releaseSession(ses, log = () => {}) {
+  const steps = [
+    ['storage', () => ses.clearStorageData()],
+    ['cache', () => ses.clearCache()],
+    ['host resolver cache', () => ses.clearHostResolverCache()],
+    ['auth cache', () => ses.clearAuthCache()],
+    ['connections', () => ses.closeAllConnections()],
+  ];
+  await Promise.all(
+    steps.map(async ([name, step]) => {
+      try {
+        await step();
+      } catch (err) {
+        log(`release session: ${name}: ${err.message}`);
+      }
+    })
+  );
+}
+
+module.exports = { prepareSession, releaseSession, SHELL_HEADERS, SHELL_HOST };

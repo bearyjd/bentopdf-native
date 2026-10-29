@@ -12,7 +12,7 @@ const { describe, it } = require('node:test');
 
 const electronBinary = require('electron');
 const resultsDir = path.join(__dirname, '..', '.test-results');
-const SCENARIOS = ['shellTabs', 'shellHandoff', 'shellMemcap', 'shellIpcReject'];
+const SCENARIOS = ['shellTabs', 'shellHandoff', 'shellHandoffError', 'shellMemcap', 'shellIpcReject', 'shellLifecycle', 'shellTeardown'];
 const only = process.env.BENTO_E2E_SCENARIOS;
 const selected = only ? SCENARIOS.filter((s) => only.split(',').includes(s)) : SCENARIOS;
 const enabled = (process.env.BENTO_E2E_TRANSPORTS || 'scheme').split(',').includes('scheme');

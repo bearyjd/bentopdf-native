@@ -84,8 +84,11 @@ async function readRegularFile(filePath, maxBytes = MAX_BYTES, expect = {}) {
  * module issued after the user picked them in a native dialog for that same
  * WebContents; it never supplies a path. Grants expire (TTL), are capped per
  * window and die with the window. `dialogs` and `now` are injected for tests.
+ * `canUseDialogs(webContents)` decides whether a sender may open a native
+ * dialog (the tabbed shell allows only the ACTIVE tab, so a hidden background
+ * tab cannot pop one up); it defaults to "yes" for the single-window app.
  */
-function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
+function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now, canUseDialogs = () => true }) {
   const grants = new Map(); // webContents.id -> Map(token -> {filePath,name,size,expires,dev,ino,...})
 
   const tableFor = (webContents) => {
@@ -95,6 +98,9 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
       webContents.once('destroyed', () => grants.delete(id));
     }
     return grants.get(id);
+  };
+  const assertMayOpenDialog = (event) => {
+    if (!canUseDialogs(event.sender)) throw new Error('dialogs are only available to the active tab');
   };
   const grantsFor = (event) => tableFor(event.sender);
 
@@ -109,6 +115,7 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
 
   ipcMain.handle(CHANNELS.openFile, async (event, raw) => {
     assertTrusted(event, origin);
+    assertMayOpenDialog(event);
     const { multiple, extensions } = parseOpenOptions(raw);
     const picked = await dialogs.showOpenDialog(getWindow(), {
       properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
@@ -139,6 +146,7 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
 
   ipcMain.handle(CHANNELS.saveFile, async (event, rawName, bytes) => {
     assertTrusted(event, origin);
+    assertMayOpenDialog(event);
     if (!(bytes instanceof Uint8Array)) throw new Error('bytes must be a Uint8Array');
     if (bytes.byteLength > MAX_BYTES) throw new Error('data too large');
     const suggested = safeFileName(rawName);
