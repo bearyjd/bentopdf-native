@@ -28,7 +28,7 @@ const partitionFor = (id) => `bento-tab-${id}`;
  * itself when the page it was meant for is gone.
  * Tab records are frozen and replaced, never mutated.
  */
-function createTabManager({ views, liveBudget = LIVE_VIEW_BUDGET, onLoaded = async () => {}, onChange = () => {}, onError = () => {} }) {
+function createTabManager({ views, liveBudget = LIVE_VIEW_BUDGET, weights, onLoaded = async () => {}, onChange = () => {}, onError = () => {} }) {
   let tabs = new Map(); // id -> frozen Tab (insertion order = strip order)
   const live = new Map(); // id -> view
   let activeId = null;
@@ -67,7 +67,7 @@ function createTabManager({ views, liveBudget = LIVE_VIEW_BUDGET, onLoaded = asy
   }
 
   function enforceCap() {
-    for (const id of tabsToDiscard([...tabs.values()], { activeId, budget: liveBudget })) discard(id);
+    for (const id of tabsToDiscard([...tabs.values()], { activeId, budget: liveBudget, weights })) discard(id);
   }
 
   function ensureLive(tab) {

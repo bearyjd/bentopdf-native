@@ -47,7 +47,7 @@ test('registry: pages from dist, names from tools.html, exclusions applied', () 
     const registry = buildToolRegistry(dir);
     assert.deepEqual(registry.tools.map((t) => t.id), ['merge-pdf', 'sign-pdf', 'compress-pdf-to-1mb']);
     assert.deepEqual(registry.get('merge-pdf'), {
-      id: 'merge-pdf', name: 'Merge PDF', title: 'Merge PDF Files', category: 'Popular Tools', path: '/merge-pdf.html',
+      id: 'merge-pdf', name: 'Merge PDF', title: 'Merge PDF Files', category: 'Popular Tools', path: '/merge-pdf.html', weight: 1,
     });
     assert.equal(registry.get('compress-pdf-to-1mb').category, null);
     assert.equal(registry.get('compress-pdf-to-1mb').name, 'Compress PDF to 1MB Free Online');

@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { weightOfPage } = require('./live-budget');
 
 /**
  * Tool list derived from the built bundle at startup (no upstream patch, no
@@ -63,7 +64,7 @@ function parseToolsPage(html) {
 
 /**
  * @param {string} distDir realpath of the bundle
- * @returns {{tools: ReadonlyArray<{id: string, name: string, title: string|null, category: string|null, path: string}>,
+ * @returns {{tools: ReadonlyArray<{id: string, name: string, title: string|null, category: string|null, path: string, weight: number}>,
  *            get(id: unknown): object|undefined, has(id: unknown): boolean}}
  */
 function buildToolRegistry(distDir) {
@@ -79,7 +80,8 @@ function buildToolRegistry(distDir) {
   const rank = (id) => (cards.has(id) ? order.indexOf(id) : order.length);
   const tools = ids
     .map((id) => {
-      const title = pageTitle(readSmall(path.join(distDir, `${id}.html`)));
+      const html = readSmall(path.join(distDir, `${id}.html`));
+      const title = pageTitle(html);
       const card = cards.get(id);
       return Object.freeze({
         id,
@@ -87,6 +89,7 @@ function buildToolRegistry(distDir) {
         title,
         category: card ? card.category : null,
         path: `/${id}.html`,
+        weight: weightOfPage(html),
       });
     })
     .sort((a, b) => rank(a.id) - rank(b.id) || a.id.localeCompare(b.id));
@@ -94,6 +97,7 @@ function buildToolRegistry(distDir) {
   const byId = new Map(tools.map((tool) => [tool.id, tool]));
   return Object.freeze({
     tools: Object.freeze(tools),
+    weights: new Map(tools.map((tool) => [tool.id, tool.weight])), // live-view slots per tool id (live-budget.js)
     get: (id) => (typeof id === 'string' ? byId.get(id) : undefined),
     has: (id) => typeof id === 'string' && byId.has(id),
   });

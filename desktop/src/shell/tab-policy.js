@@ -11,9 +11,10 @@ const { LIVE_VIEW_BUDGET, weightOfTool } = require('./live-budget');
  * Which live tabs to discard so that the live weights sum to at most `budget`.
  * The active tab is never discarded (it may alone exceed the budget); the
  * least recently active background tabs go first. Pure: takes
- * `[{id, live, lastActive, toolId?}]`, returns ids, mutates nothing.
+ * `[{id, live, lastActive, toolId?}]` and the registry's `weights` Map(toolId -> slots), returns
+ * ids, mutates nothing.
  */
-function tabsToDiscard(tabs, { activeId, budget = LIVE_VIEW_BUDGET, weightOf = (t) => weightOfTool(t.toolId) } = {}) {
+function tabsToDiscard(tabs, { activeId, budget = LIVE_VIEW_BUDGET, weights, weightOf = (t) => weightOfTool(t.toolId, weights) } = {}) {
   if (!Number.isInteger(budget) || budget < 1) throw new RangeError('budget must be an integer >= 1');
   const live = tabs.filter((t) => t.live);
   let total = live.reduce((sum, t) => sum + weightOf(t), 0);

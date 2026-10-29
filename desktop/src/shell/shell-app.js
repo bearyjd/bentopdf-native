@@ -196,6 +196,7 @@ async function startShell(options) {
   tabs = createTabManager({
     views,
     liveBudget,
+    weights: registry.weights,
     onLoaded: handoff,
     onChange: pushState,
     onError: (err, tab) => log(`tab ${tab.id}: ${err.message}`),

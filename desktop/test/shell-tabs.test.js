@@ -139,28 +139,81 @@ test('tabs: in-page navigation is remembered so a discarded tab reloads where th
 
 // ---- review fixes: lifecycle, weights, async handoff ----
 
-const { LIVE_VIEW_BUDGET, LIBREOFFICE_WEIGHT, OCR_WEIGHT, weightOfTool } = require('../src/shell/live-budget');
+const fs = require('node:fs');
+const path = require('node:path');
+const { LIVE_VIEW_BUDGET, LIBREOFFICE_WEIGHT, OCR_WEIGHT, UNKNOWN_TOOL_WEIGHT, weightOfPage, weightOfTool } = require('../src/shell/live-budget');
+const { buildToolRegistry } = require('../src/shell/tool-registry');
+
+const DIST = fs.realpathSync(path.join(__dirname, '..', '..', 'dist'));
+const registry = buildToolRegistry(DIST);
+const weights = registry.weights;
+
+test('weights: pages are classified by the engines they preload; unknown ids weigh the maximum', () => {
+  assert.equal(weightOfPage('<link rel="modulepreload" href="/assets/libreoffice-loader-abc.js">'), LIBREOFFICE_WEIGHT);
+  assert.equal(weightOfPage('<script src="/libreoffice-wasm/soffice.js"></script>'), LIBREOFFICE_WEIGHT);
+  assert.equal(weightOfPage('<link href="/assets/tesseract-runtime-x.js">'), OCR_WEIGHT);
+  assert.equal(weightOfPage('<link href="/assets/libreoffice-loader-x.js"><link href="/assets/tesseract-runtime-x.js">'), LIBREOFFICE_WEIGHT);
+  assert.equal(weightOfPage('<p>light</p>'), 1);
+  assert.equal(weightOfPage(undefined), 1);
+  const known = new Map([['a', 1], ['b', 2]]);
+  assert.equal(weightOfTool(null, known), 1, 'landing page');
+  assert.equal(weightOfTool('a', known), 1);
+  assert.equal(weightOfTool('b', known), 2);
+  assert.equal(weightOfTool('not-a-tool', known), UNKNOWN_TOOL_WEIGHT);
+  assert.equal(weightOfTool('__proto__', known), UNKNOWN_TOOL_WEIGHT, 'hostile ids get the heaviest weight');
+  assert.equal(weightOfTool('a'), UNKNOWN_TOOL_WEIGHT, 'no registry: nothing is known');
+  assert.equal(UNKNOWN_TOOL_WEIGHT, LIBREOFFICE_WEIGHT);
+});
+
+/** Independent of the registry's HTML markers: follow the entry script's STATIC imports through dist/assets. */
+function usesLibreOfficeByImportGraph(htmlFile) {
+  const html = fs.readFileSync(path.join(DIST, htmlFile), 'utf8');
+  const entry = /src="\/assets\/([^"]+\.js)"/.exec(html);
+  if (!entry) return false;
+  const seen = new Set();
+  const queue = [entry[1]];
+  while (queue.length) {
+    const name = queue.pop();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const file = path.join(DIST, 'assets', name);
+    if (!fs.existsSync(file)) continue;
+    const text = fs.readFileSync(file, 'utf8');
+    if (/libreoffice-wasm|soffice/.test(text)) return true;
+    for (const m of text.matchAll(/(?:from|import)\s*["'`]\.\/([A-Za-z0-9_.-]+\.js)["'`]/g)) queue.push(m[1]);
+  }
+  return false;
+}
+
+test('weights: every tool page in dist that loads the LibreOffice engine weighs more than one slot (cross-check against the bundle)', () => {
+  const heavyByHtml = fs.readdirSync(DIST).filter((f) => f.endsWith('.html') && /libreoffice-loader|libreoffice-wasm|soffice/i.test(fs.readFileSync(path.join(DIST, f), 'utf8')));
+  assert.ok(heavyByHtml.length >= 10, `expected the LibreOffice converters in dist, found ${heavyByHtml.length}`);
+  const byGraph = registry.tools.filter((t) => usesLibreOfficeByImportGraph(`${t.id}.html`)).map((t) => t.id).sort();
+  const byRegistry = registry.tools.filter((t) => t.weight >= LIBREOFFICE_WEIGHT).map((t) => t.id).sort();
+  assert.ok(byGraph.length >= 10);
+  for (const id of byGraph) assert.ok(weightOfTool(id, weights) > 1, `${id} loads the LibreOffice engine but weighs ${weightOfTool(id, weights)}`);
+  assert.deepEqual(byRegistry.filter((id) => !byGraph.includes(id)), [], 'no light-by-graph tool is weighed heavy');
+  assert.ok(heavyByHtml.every((f) => weights.get(f.replace(/\.html$/, '')) === undefined || weights.get(f.replace(/\.html$/, '')) > 1));
+  assert.equal(weights.get('ocr-pdf'), OCR_WEIGHT);
+  assert.equal(weights.get('merge-pdf'), 1);
+});
 
 test('policy: heavy tools weigh several slots, so fewer of them stay live', () => {
-  assert.equal(weightOfTool('merge-pdf'), 1);
-  assert.equal(weightOfTool(null), 1);
-  assert.equal(weightOfTool('__proto__'), 1, 'hostile ids get the default weight');
-  assert.equal(weightOfTool('word-to-pdf'), LIBREOFFICE_WEIGHT);
-  assert.equal(weightOfTool('ocr-pdf'), OCR_WEIGHT);
   assert.ok(LIBREOFFICE_WEIGHT * 2 > LIVE_VIEW_BUDGET, 'two LibreOffice tabs cannot both be live in the default budget');
   const tabs = [
     { id: 1, live: true, lastActive: 1, toolId: 'word-to-pdf' },
     { id: 2, live: true, lastActive: 2, toolId: 'merge-pdf' },
     { id: 3, live: true, lastActive: 3, toolId: 'excel-to-pdf' }, // active
   ];
-  assert.deepEqual(tabsToDiscard(tabs, { activeId: 3 }), [1], 'oldest heavy tab goes; 4+1+4 > 6, 1+4 <= 6');
-  assert.deepEqual(tabsToDiscard(tabs, { activeId: 3, budget: 4 }), [1, 2], 'the active tab stays even when alone it fills the budget');
-  assert.deepEqual(tabsToDiscard(tabs.map((t) => ({ ...t, toolId: 'merge-pdf' })), { activeId: 3 }), [], 'light tabs all fit');
+  assert.deepEqual(tabsToDiscard(tabs, { activeId: 3, weights }), [1], 'oldest heavy tab goes; 4+1+4 > 6, 1+4 <= 6');
+  assert.deepEqual(tabsToDiscard(tabs, { activeId: 3, budget: 4, weights }), [1, 2], 'the active tab stays even when alone it fills the budget');
+  assert.deepEqual(tabsToDiscard(tabs.map((t) => ({ ...t, toolId: 'merge-pdf' })), { activeId: 3, weights }), [], 'light tabs all fit');
+  assert.deepEqual(tabsToDiscard([{ id: 1, live: true, lastActive: 1, toolId: 'mystery' }, { id: 2, live: true, lastActive: 2, toolId: 'merge-pdf' }], { activeId: 2, budget: 4, weights }), [1], 'an unknown id is heavy');
 });
 
 test('tabs: a heavy tool tab pushes light background tabs out of the budget (navigate re-checks)', async () => {
   const v = fakeViews();
-  const tm = createTabManager({ views: v.adapter, liveBudget: 6 });
+  const tm = createTabManager({ views: v.adapter, liveBudget: 6, weights });
   for (let i = 0; i < 3; i += 1) await tm.open({ page: '/index.html' });
   assert.deepEqual(tm.list().map((t) => t.live), [true, true, true]);
   await tm.navigate(3, { page: '/word-to-pdf.html', toolId: 'word-to-pdf' }); // 1 + 1 + 4 = 6: fits
@@ -282,7 +335,7 @@ test('handoff: only the page the handoff was started for is a valid target', () 
 
 test('tabs: a page that navigated itself to a heavy tool is re-weighed (recordPage enforces the cap)', async () => {
   const v = fakeViews();
-  const tm = createTabManager({ views: v.adapter, liveBudget: 6 });
+  const tm = createTabManager({ views: v.adapter, liveBudget: 6, weights });
   for (let i = 0; i < 3; i += 1) await tm.open({ page: '/index.html' });
   assert.deepEqual(tm.list().map((t) => t.live), [true, true, true]);
   tm.recordPage(3, '/word-to-pdf.html', 'word-to-pdf'); // 1 + 1 + 4 = 6: fits
