@@ -18,4 +18,14 @@ expect "mixed case 'Needs Review' fails" 1 "foo: Needs Review"
 expect "TODO fails" 1 "foo: TODO licence"
 expect "tbd fails" 1 "foo: tbd"
 expect "UNVERIFIED fails" 1 "foo: Unverified"
+expect "lowercase todo fails" 1 "foo: todo"
+expect "TBD fails" 1 "foo: TBD"
+expect "needs-review spelling fails" 1 "foo: needs-review"
+expect "NEEDS_REVIEW spelling fails" 1 "foo: NEEDS_REVIEW"
+# the release gate must use this script's marker definition, not its own
+if grep -q 'check-notice.sh' "$HERE/verify-artifact.sh" && ! grep -Eq "grep.*'NEEDS REVIEW'" "$HERE/verify-artifact.sh"; then
+  echo "ok:   verify-artifact.sh delegates to check-notice.sh"
+else
+  echo "FAIL: verify-artifact.sh has its own marker definition" >&2; FAILED=1
+fi
 exit "$FAILED"

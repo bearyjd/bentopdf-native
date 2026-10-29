@@ -268,6 +268,24 @@ if [ "$WITH_FLATPAK" = 1 ]; then
 fi
 attempt "--release with unresolved NOTICE / no release tag" deb none --release
 
+# One marker definition (packaging/check-notice.sh): in an otherwise release-ready tree, every unresolved-marker
+# spelling in NOTICE must fail --release. A positive control proves the tree is release-ready, so these fail only
+# because of the marker.
+m_release_ready() {
+  sed -i -E 's/^  release tag: +none/  release tag:   v9.9.9/' "$(resdir "$1")/SOURCE.txt"
+  printf 'Licensed under the GNU Affero General Public License v3.0\n' > "$(resdir "$1")/NOTICE"
+}
+m_release_marker() { m_release_ready "$1"; printf 'foo: %s\n' "$RELMARK" >> "$(resdir "$1")/NOTICE"; }
+rm -rf "$T/work"; cp -a --reflink=auto "$T/base/deb" "$T/work"; m_release_ready "$T/work"
+if ! run_gate deb "$T/work" --release; then
+  printf '%s\n' "$GATE_OUT" | tail -5 >&2; echo "positive control failed: a release-ready deb tree must pass --release" >&2; exit 1
+fi
+rm -rf "$T/work"
+echo "positive control: release-ready deb tree passes --release"
+for RELMARK in "NEEDS REVIEW" "needs review" "Needs Review" "TODO" "todo" "TBD" "Unverified"; do
+  attempt "release-ready tree with NOTICE marker '$RELMARK'" deb m_release_marker --release
+done
+
 attempt_scripts "postinst missing" deb postinst DELETE
 attempt_scripts "postinst empty" deb postinst EMPTY
 attempt_scripts "postinst probes as root (no setpriv)" deb postinst 's/setpriv --reuid=65534/true/'
