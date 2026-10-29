@@ -149,10 +149,10 @@ for f in src/main.js src/menu.js src/argv-policy.js src/test-mode.js src/open-fi
   [ -s "$WORK/asar/$f" ] || fail "app.asar lacks $f"
 done
 grep -q 'app.isPackaged ? {} : process.env' "$WORK/asar/src/main.js" || fail "main.js does not gate BENTO_* overrides on app.isPackaged"
-if grep -rn 'process\.env' "$WORK/asar/src" | grep -Ev 'src/main.js:.*(overrides = app.isPackaged|process\.env\[name\]|unsafeSwitches\()|src/argv-policy.js:.*NEVER_MATCHES'; then
-  fail "process.env is read somewhere other than the guarded overrides line, the sandbox-env refusal and the argv policy default"
-fi
-pass "BENTO_* overrides are read only through the app.isPackaged guard"
+# process.env: parsed, not grepped. Comments never count; the four known lines must match exactly, so a read
+# appended to one of them fails. The same helper RUNS the packaged marker logic and argv policy (see below).
+node "$ROOT/desktop/tools/check-asar-policy.js" "$WORK/asar" || fail "process.env is read outside the known guarded lines, or the packaged marker logic / argv policy misbehaves"
+pass "BENTO_* overrides are read only through the app.isPackaged guard; packaged marker logic and argv policy behave as designed"
 
 grep -q "'ELECTRON_DISABLE_SANDBOX'" "$WORK/asar/src/main.js" && grep -q "'CHROME_DEVEL_SANDBOX'" "$WORK/asar/src/main.js" || fail "main.js does not refuse to start when ELECTRON_DISABLE_SANDBOX / CHROME_DEVEL_SANDBOX is set"
 grep -q 'app.exit(2)' "$WORK/asar/src/main.js" || fail "main.js has no exit-2 refusal"
@@ -160,6 +160,14 @@ grep -q "require('./argv-policy')" "$WORK/asar/src/main.js" || fail "main.js doe
 grep -qF 'unsafeSwitches(process.argv, process.env, policyOptions)' "$WORK/asar/src/main.js" || fail "main.js does not check its own argv"
 grep -qF 'unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true })' "$WORK/asar/src/main.js" || fail "main.js does not check second-instance argv"
 grep -qF 'packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath)' "$WORK/asar/src/main.js" || fail "main.js does not gate packaged test mode on the marker file"
+# The marker logic itself, as text (the helper above also runs it): each control must still be spelled out in test-mode.js,
+# the argv policy must require the marker for packaged builds, and main.js must feed it the marker result.
+for needle in 'fsImpl.constants.O_NOFOLLOW' 'fsImpl.fstatSync(fd)' '!st.isFile()' 'st.nlink !== 1' 'st.uid !== uid' '(st.mode & 0o022) !== 0' 'st.size !== MARKER_CONTENT.length' '=== MARKER_CONTENT' 'fsImpl.realpathSync(resourcesPath) !== path.resolve(resourcesPath)' "typeof uid !== 'number'"; do
+  grep -qF -- "$needle" "$WORK/asar/src/test-mode.js" || fail "test-mode.js lost the marker control: $needle"
+done
+grep -qF "const MARKER_CONTENT = 'bento-test-mode-v1\\n';" "$WORK/asar/src/test-mode.js" || fail "test-mode.js marker token changed"
+grep -qF "(!packaged || testMarker === true)" "$WORK/asar/src/argv-policy.js" || fail "argv-policy.js does not require testMarker === true for a packaged build"
+pass "test-mode.js carries every marker control (O_NOFOLLOW, fstat, regular file, nlink, owner, mode, size, token, realpath); argv policy requires testMarker === true"
 grep -q '%PDF-' "$WORK/asar/src/open-file.js" || fail "open-file.js does not check the %PDF- header"
 grep -q 'realpath' "$WORK/asar/src/open-file.js" || fail "open-file.js does not resolve symlinks"
 pass "argv policy (own and second-instance argv) and open-with header/symlink checks are present"
@@ -230,7 +238,14 @@ case "$KIND" in
     grep -q 'apparmor_restrict_unprivileged_userns' "$POST" || fail "post-install does not look at the AppArmor userns restriction"
     grep -q 'chmod 4755' "$POST" || fail "post-install has no setuid fallback for the sandbox helper"
     grep -q 'chmod 0755' "$POST" || fail "post-install does not reset the sandbox helper to 0755 first"
-    pass "post-install: non-root userns probe, AppArmor-aware, setuid helper only as fallback" ;;
+    pass "post-install: non-root userns probe, AppArmor-aware, setuid helper only as fallback"
+    # deb/rpm launchers start the binary directly, with NO env scrub. For these the only defence for the packaged
+    # test mode is that the install tree is root-owned (a user cannot create the marker in it): see docs/desktop-linux.md.
+    if [ -z "$TREE" ]; then
+      if [ "$KIND" = deb ]; then NOT_ROOT="$(dpkg-deb -c "$ART" | awk '$2 != "root/root"' | wc -l)"; else NOT_ROOT="$(rpm -qp --queryformat '[%{FILEUSERNAME}:%{FILEGROUPNAME}\n]' "$ART" | grep -vxc 'root:root' || true)"; fi
+      [ "$NOT_ROOT" = 0 ] || fail "$NOT_ROOT package entr(ies) not owned by root:root (the root-owned install tree is the only marker defence for $KIND)"
+      pass "$KIND payload: every entry owned by root:root, so no unprivileged user can plant the test-mode marker"
+    fi ;;
   flatpak)
     L="$PAYLOAD/bin/$EXE_NAME"
     [ -s "$L" ] || fail "flatpak launcher bin/$EXE_NAME missing"
