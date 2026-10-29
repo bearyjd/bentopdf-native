@@ -14,7 +14,7 @@ let tmp;
 let transport;
 let port;
 before(async () => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bento-http-')));
+  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'bento-http-')));
   fs.writeFileSync(path.join(tmp, 'index.html'), 'home');
   transport = await startHttpTransport({ rootReal: tmp, headers: { 'X-Test': '1' } });
   port = new URL(transport.origin).port;

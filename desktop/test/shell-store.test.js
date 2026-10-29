@@ -36,7 +36,7 @@ test('store: adds validated files, exposes no path, reuses the id of an already 
   assert.equal(again.id, a.id, 'same file, same document');
   assert.equal(store.list().length, 2);
   assert.deepEqual(store.list().map((d) => d.id), [a.id, b.id]);
-  assert.equal(store.get(a.id).filePath, fs.realpathSync(path.join(dir, 'a.pdf')), 'path kept main-side');
+  assert.equal(store.get(a.id).filePath, fs.realpathSync.native(path.join(dir, 'a.pdf')), 'path kept main-side');
   assert.ok(Object.isFrozen(store.get(a.id)));
 });
 
@@ -111,7 +111,8 @@ test('recents: capped, deduplicated, persisted, ids map back to paths, no path i
   assert.equal(recents.pathOf(listed[0].id), '/docs/5.pdf');
   assert.equal(recents.pathOf('__proto__'), undefined);
   assert.equal(recents.pathOf({}), undefined);
-  assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600');
+  // POSIX mode bits only: on Windows the file's protection is the profile directory's ACL (chmod maps to a read-only flag).
+  if (process.platform !== 'win32') assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600');
   const reloaded = createRecents({ file });
   assert.deepEqual(reloaded.list().map((r) => r.name), listed.map((r) => r.name));
   assert.equal(reloaded.remove(reloaded.list()[0].id), true);

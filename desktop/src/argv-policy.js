@@ -7,8 +7,12 @@
 //
 // Anything that starts with a dash is a switch, whatever its spelling: on POSIX
 // Chromium honours a single dash too (`-remote-debugging-port=0`; verified on
-// Electron 45, docs/desktop-linux.md). Only the exact, case-sensitive forms
-// below pass. A bare `--` ends the options: what follows is a file argument.
+// Electron 45, docs/desktop-linux.md). On Windows Chromium additionally accepts a
+// leading slash (`/remote-debugging-port=0`): base/command_line.cc defines
+// kSwitchPrefixes as {"--", "-", "/"} under IS_WIN, and lowercases the switch name there
+// (read from the Chromium source, NOT measured on a Windows runner; docs/desktop-windows.md).
+// So on win32 a leading `/` is a switch too. On POSIX `/home/u/x.pdf` is a file argument.
+// Only the exact, case-sensitive forms below pass. A bare `--` ends the options: what follows is a file argument.
 // Switch names are built from parts so the release gate's grep for forbidden
 // flag literals stays meaningful.
 const DASHES = '--';
@@ -28,7 +32,14 @@ const TEST_PREFIX = [`${DASHES}remote-debugging-port=`, `${DASHES}user-data-dir=
 // first process never re-parses the second one's switches. Accepted for second-instance argv only.
 const SECOND_INSTANCE_INJECTED = new Set([`${DASHES}allow-file-access-from-files`]);
 
-const looksLikeSwitch = (arg) => typeof arg === 'string' && arg.startsWith('-');
+const looksLikeSwitch = (arg, platform) =>
+  typeof arg === 'string' && (arg.startsWith('-') || (platform === 'win32' && arg.startsWith('/')));
+
+/** Test mode (headless CI smoke): the window is never shown and test-only switches pass. */
+const testHeadless = (env = {}) => env.BENTO_TEST_HEADLESS === '1';
+
+/** Test mode only: directory for per-process trace files (BENTO_TEST_TRACE_DIR), or undefined. */
+const testTraceDir = (env = {}) => (testHeadless(env) ? env.BENTO_TEST_TRACE_DIR : undefined);
 
 function allowed(arg, testMode, secondInstance) {
   if (ALWAYS_ALLOWED.has(arg)) return true;
@@ -41,13 +52,13 @@ function allowed(arg, testMode, secondInstance) {
  * Returns the arguments of `argv` (after the executable) that this application
  * refuses, i.e. every switch not on the allowlist (empty array = fine).
  */
-function unsafeSwitches(argv, env = {}, { secondInstance = false, packaged = false, testMarker = false } = {}) {
+function unsafeSwitches(argv, env = {}, { secondInstance = false, packaged = false, testMarker = false, platform = process.platform } = {}) {
   const list = Array.isArray(argv) ? argv.slice(1) : [];
   const end = list.indexOf('--');
   const options = end === -1 ? list : list.slice(0, end);
   // A packaged build honours the test switch only with the marker file (testMarker), never on the environment alone.
-  const testMode = env.BENTO_TEST_HEADLESS === '1' && (!packaged || testMarker === true);
-  return options.filter((arg) => looksLikeSwitch(arg) && !allowed(arg, testMode, secondInstance));
+  const testMode = testHeadless(env) && (!packaged || testMarker === true);
+  return options.filter((arg) => looksLikeSwitch(arg, platform) && !allowed(arg, testMode, secondInstance));
 }
 
-module.exports = { unsafeSwitches };
+module.exports = { unsafeSwitches, looksLikeSwitch, testHeadless, testTraceDir };

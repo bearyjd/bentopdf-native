@@ -7,7 +7,10 @@ const { pdfPathsFromArgv } = require('../src/open-file');
 
 const NO_ENV = {};
 const TEST_ENV = { BENTO_TEST_HEADLESS: '1' };
-const refused = (arg, env = NO_ENV) => unsafeSwitches(['exe', arg], env);
+// The platform is passed explicitly so the result does not depend on the host: on win32 Chromium treats a
+// leading '/' as a switch prefix (base/command_line.cc), on POSIX '/x' is a file argument.
+const refused = (arg, env = NO_ENV, platform = 'linux') => unsafeSwitches(['exe', arg], env, { platform });
+const posix = { platform: 'linux' };
 
 test('unsafeSwitches: every switch not on the allowlist is refused, in every spelling', () => {
   const bad = ['--no-sandbox', '--NO-SANDBOX', '--No-Sandbox', '-no-sandbox', '-NO-SANDBOX', '-remote-debugging-port=9222', '-js-flags=--allow-natives-syntax',
@@ -34,16 +37,27 @@ test('unsafeSwitches: test-only switches pass only with BENTO_TEST_HEADLESS=1, a
 
 test('unsafeSwitches: the platform hint, file arguments and junk pass; the executable is not inspected', () => {
   for (const hint of ['auto', 'wayland', 'x11']) assert.deepEqual(refused(`--ozone-platform-hint=${hint}`), []);
-  assert.deepEqual(unsafeSwitches(['exe', '--ozone-platform-hint=auto', '/home/u/a.pdf', 'file:///x.pdf', 'rel/b.pdf'], NO_ENV), []);
+  assert.deepEqual(unsafeSwitches(['exe', '--ozone-platform-hint=auto', '/home/u/a.pdf', 'file:///x.pdf', 'rel/b.pdf'], NO_ENV, posix), []);
+  assert.deepEqual(unsafeSwitches(['exe', 'C:\\Users\\u\\a.pdf', '\\\\server\\share\\b.pdf', 'file:///C:/x.pdf', 'rel\\b.pdf'], NO_ENV, { platform: 'win32' }), []);
   assert.deepEqual(unsafeSwitches(undefined), []);
   assert.deepEqual(unsafeSwitches(['exe', 42, null], NO_ENV), []);
 });
 
 test('unsafeSwitches: the switch Electron injects into second-instance argv passes there only', () => {
-  const injected = ['exe', '--ozone-platform-hint=auto', '--allow-file-access-from-files', '/d/a.pdf'];
-  assert.deepEqual(unsafeSwitches(injected, NO_ENV, { secondInstance: true }), []);
-  assert.deepEqual(unsafeSwitches(injected, NO_ENV), ['--allow-file-access-from-files']);
-  assert.deepEqual(unsafeSwitches(['exe', '--allow-file-access-from-files', '--no-sandbox'], NO_ENV, { secondInstance: true }), ['--no-sandbox']);
+  for (const [platform, file] of [['linux', '/d/a.pdf'], ['win32', 'C:\\d\\a.pdf']]) {
+    const injected = ['exe', '--ozone-platform-hint=auto', '--allow-file-access-from-files', file];
+    assert.deepEqual(unsafeSwitches(injected, NO_ENV, { secondInstance: true, platform }), [], platform);
+    assert.deepEqual(unsafeSwitches(injected, NO_ENV, { platform }), ['--allow-file-access-from-files'], platform);
+  }
+  assert.deepEqual(unsafeSwitches(['exe', '--allow-file-access-from-files', '--no-sandbox'], NO_ENV, { secondInstance: true, platform: 'linux' }), ['--no-sandbox']);
+});
+
+test('unsafeSwitches: on win32 a leading slash is a switch (Chromium prefix, read from source), on POSIX a path', () => {
+  // A POSIX-looking /d/a.pdf is ambiguous on Windows; failing closed (dropping the launch) is the safe side.
+  // Real Windows file arguments are C:\x.pdf or \\server\share, which never start with a slash.
+  assert.deepEqual(refused('/no-sandbox', NO_ENV, 'win32'), ['/no-sandbox']);
+  assert.deepEqual(refused('/d/a.pdf', NO_ENV, 'win32'), ['/d/a.pdf']);
+  assert.deepEqual(refused('/no-sandbox', NO_ENV, 'linux'), []);
 });
 
 test('unsafeSwitches: a bare -- ends the options; refused switches before it still count', () => {
@@ -53,7 +67,7 @@ test('unsafeSwitches: a bare -- ends the options; refused switches before it sti
 });
 
 test('open-with still accepts only file arguments and file:// URLs next to refused switches', () => {
-  assert.deepEqual(pdfPathsFromArgv(['exe', '--no-sandbox', 'https://x.example/a.pdf', '/d/a.pdf'], { cwd: '/' }), ['/d/a.pdf']);
+  assert.deepEqual(pdfPathsFromArgv(['exe', '--no-sandbox', 'https://x.example/a.pdf', '/d/a.pdf'], { cwd: '/', platform: 'linux' }), ['/d/a.pdf']);
 });
 
 test('unsafeSwitches: a packaged build refuses the test switches with BENTO_TEST_HEADLESS=1 but NO marker', () => {

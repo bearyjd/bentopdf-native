@@ -9,7 +9,7 @@ const MAX_DOCS = 32;
 
 /**
  * @typedef {{id: string, name: string, size: number, source: 'file'|'memory', lastUsed: number}} PublicDoc
- * @typedef {PublicDoc & {filePath?: string, dev?: number, ino?: number, bytes?: Uint8Array}} DocRecord
+ * @typedef {PublicDoc & {filePath?: string, dev?: bigint, ino?: bigint, bytes?: Uint8Array}} DocRecord
  */
 
 /**

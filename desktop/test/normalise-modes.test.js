@@ -7,7 +7,7 @@ const path = require('node:path');
 const { test } = require('node:test');
 const { normaliseModes } = require('../tools/normalise-modes');
 
-test('normaliseModes: no group/world-writable or setuid entries survive; exec bit decides 0755/0644', () => {
+test('normaliseModes: no group/world-writable or setuid entries survive; exec bit decides 0755/0644', { skip: process.platform === 'win32' && 'POSIX-only: Windows has no unix permission bits (chmod only toggles read-only); the tool normalises the Linux build tree' }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bento-modes-'));
   try {
     fs.mkdirSync(path.join(root, 'sub'));

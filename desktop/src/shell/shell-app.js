@@ -40,7 +40,7 @@ const log = (message) => process.stderr.write(`[bento] ${message}\n`);
  */
 async function startShell(options) {
   const { distDir, dialogs = dialog, show = true, liveBudget, homeTab = true, onSession = () => {}, onStateChanged = () => {}, beforeInject = async () => {} } = options;
-  const rootReal = fs.realpathSync(distDir);
+  const rootReal = fs.realpathSync.native(distDir); // .native: see app.js (8.3 short names on Windows)
   if (!fs.existsSync(path.join(rootReal, 'index.html'))) throw new Error(`${rootReal} does not look like a BentoPDF bundle (no index.html)`);
   const headers = buildAppHeaders(rootReal);
   const registry = buildToolRegistry(rootReal);

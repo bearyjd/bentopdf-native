@@ -7,6 +7,7 @@ const PATTERNS = {
   appId: /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_-]*){2,}$/,
   executableName: /^[a-z0-9][a-z0-9-]*$/,
   iconPng: /^[A-Za-z0-9._/-]+$/,
+  iconIco: /^[A-Za-z0-9._/-]+$/,
   summary: /^[A-Za-z0-9 ._,()-]+$/,
   sourceUrl: /^https:\/\/[A-Za-z0-9.-]+(\/[A-Za-z0-9._~-]+)*$/,
   upstreamUrl: /^https:\/\/[A-Za-z0-9.-]+(\/[A-Za-z0-9._~-]+)*$/,

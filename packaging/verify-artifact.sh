@@ -152,7 +152,7 @@ for f in src/main.js src/menu.js src/argv-policy.js src/test-mode.js src/open-fi
   [ -s "$WORK/asar/$f" ] || fail "app.asar lacks $f"
 done
 grep -q 'app.isPackaged ? {} : process.env' "$WORK/asar/src/main.js" || fail "main.js does not gate BENTO_* overrides on app.isPackaged"
-# process.env: parsed, not grepped. Comments never count; the four known lines must match exactly, so a read
+# process.env: parsed, not grepped. Comments never count; the five known lines must match exactly, so a read
 # appended to one of them fails. The same helper RUNS the packaged marker logic and argv policy (see below).
 node "$ROOT/desktop/tools/check-asar-policy.js" "$WORK/asar" || fail "process.env is read outside the known guarded lines, or the packaged marker logic / argv policy misbehaves"
 pass "BENTO_* overrides are read only through the app.isPackaged guard; packaged marker logic and argv policy behave as designed"

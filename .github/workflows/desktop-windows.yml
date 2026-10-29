@@ -1,0 +1,279 @@
+name: desktop-windows
+
+# Builds the Windows x64 desktop packages (NSIS installer + portable exe), runs the artifact
+# gate, then INSTALLS, runs and UNINSTALLS them on the runner (headless smoke). Deliberately NOT
+# triggered by pull_request: the build fetches and executes upstream BentoPDF code (npm install and
+# vite build), which must never run on untrusted PR code. Signing is optional and used only when the
+# repository secrets named below exist (see docs/desktop-windows.md); without them the output is unsigned.
+#
+# `paths:` do not apply to tag pushes (GitHub workflow syntax reference), so every v* tag builds.
+# The workflow was verified on a real windows-latest runner from the feat/m5-windows-on-main branch (rebased onto
+# main's marker-gated test mode) with a temporary branch trigger: runs 40840883624 (3 unit-test failures from main's
+# POSIX-only test assumptions) and 40845803115 (green; see docs/desktop-windows.md). That trigger has been removed.
+# It never runs on pull_request.
+#
+# Action pins were checked with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` (commit objects) on 2026-10-28:
+# checkout v7.0.1, setup-node v7.1.0, upload-artifact v7.0.2 (same pins as desktop-linux.yml) and
+# download-artifact v8.0.2 resolve to the SHAs pinned below.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'packaging/**'
+      - 'scripts/**'
+      - '.github/workflows/desktop-windows.yml'
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The offline bundle is built on Linux, the platform scripts/build-local.sh and the Linux
+  # workflow already prove, and handed to the Windows job as an artifact. Reason: build-local.sh needs
+  # perl/curl/tar/realpath and builds ~370 MB of WASM assets from upstream; porting that to Git Bash would
+  # add a second, unproven build path for no packaging benefit (the bundle is platform-independent).
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Lint shell scripts
+        run: shellcheck -S warning scripts/*.sh packaging/*.sh packaging/*/*.sh packaging/linux/AppRun packaging/flatpak/launcher.sh.in
+
+      - name: Linux-runnable gate tests (policy mutations red/green, portable exit-code policy)
+        working-directory: desktop
+        run: |
+          npm ci --ignore-scripts
+          cd ..
+          bash packaging/windows/test-portable-second-step.sh
+          bash packaging/test-asar-policy-mutations.sh
+          (cd desktop && node --test test/portable-outcome.test.js)
+
+      - name: Build the offline bundle
+        run: |
+          bash scripts/build-local.sh
+          bash scripts/check-dist.sh dist
+          if [ -n "$(find dist -type l -print -quit)" ]; then echo "::error::dist/ contains a symlink"; exit 1; fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: offline-bundle
+          path: dist
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  windows:
+    needs: bundle
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      # Secrets are only handed to the signing build step, and only for main pushes and tags.
+      SIGNING_ALLOWED: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') }}
+    steps:
+      - name: Keep line endings as committed (the shell scripts must stay LF)
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Release provenance (tags only)
+        # Releases are built from a tagged commit on main, never from a PR branch.
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          head="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          [ "$head" = "$tag_commit" ] || { echo "::error::HEAD $head is not the commit of tag $TAG ($tag_commit)"; exit 1; }
+          git fetch --no-tags "$REPO_URL" main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main \
+            || { echo "::error::tag $TAG ($tag_commit) is not reachable from main"; exit 1; }
+          echo "tag $TAG = $head, reachable from main"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: offline-bundle
+          path: dist
+
+      - name: Install desktop dependencies (Electron zip cached where SOURCE.txt can hash it)
+        working-directory: desktop
+        run: |
+          export ELECTRON_CACHE="$RUNNER_TEMP/electron-cache"
+          echo "ELECTRON_CACHE=$ELECTRON_CACHE" >> "$GITHUB_ENV"
+          npm ci
+
+      # Blocking: the outcome is enforced by the "Enforce unit test result" step at the end, so the later
+      # steps (build, smoke) still run and report even when this one fails. EVERY test/*.test.js runs here except
+      # the explicit EXCLUDE list (tests that drive a Linux Electron/Xvfb or the Linux packaging); a new test
+      # therefore runs on Windows by default. A test that cannot run on win32 skips itself with a stated reason
+      # (node:test skip), it is never hidden here.
+      - name: Desktop unit tests (blocking, all test/*.test.js except the Linux-Electron ones)
+        id: unit
+        continue-on-error: true
+        working-directory: desktop
+        run: |
+          exclude=" e2e.test.js main-entry.test.js shell-e2e.test.js csp-smoke.test.js "
+          files=()
+          for f in test/*.test.js; do
+            case "$exclude" in *" ${f##*/} "*) echo "excluded (needs Linux Electron): $f"; continue ;; esac
+            files+=("$f")
+          done
+          echo "running ${#files[@]} test files"
+          node --test --test-concurrency=1 "${files[@]}"
+
+      - name: Mutation test of the NOTICE check
+        run: bash packaging/test-check-notice.sh
+
+      - name: Licence gate (NOTICE)
+        id: notice
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          count="$(packaging/check-notice.sh)"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          if [ "$IS_TAG" = true ]; then
+            packaging/check-notice.sh --release >/dev/null
+          elif [ "$count" != 0 ]; then
+            echo "::warning::NOT FOR RELEASE: NOTICE has $count unresolved lines"
+            echo "### NOT FOR RELEASE: NOTICE has $count unresolved lines" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # SIGNING. Secrets are passed ONLY as `env:` of the one build step below, never through $GITHUB_ENV, so
+      # no later step inherits them and a newline in a secret value cannot inject variables. Signing is allowed
+      # only for pushes to main and v* tags (never workflow_dispatch from another branch, never the temporary
+      # branch trigger): the unsigned step runs everywhere else and has no secret in its environment. With the
+      # secrets absent the signing step is inert (empty values are unset, electron-builder sees no configuration).
+      # Before adding ANY secret the repository owner must create a GitHub Environment restricted to main and v*
+      # tags (docs/desktop-windows.md, "Signing"); this workflow does not name an environment on purpose.
+      - name: Build packages (NSIS installer and portable exe, unsigned)
+        if: ${{ env.SIGNING_ALLOWED != 'true' }}
+        run: |
+          echo "### Signing mode: none (not a main push or v* tag)" >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/package-windows.sh
+
+      - name: Build packages (NSIS installer and portable exe, signed when secrets exist)
+        if: ${{ env.SIGNING_ALLOWED == 'true' }}
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
+          AZURE_SIGN_PUBLISHER: ${{ secrets.AZURE_SIGN_PUBLISHER }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          # An empty variable is unset: electron-builder then sees no signing configuration at all.
+          for v in CSC_LINK CSC_KEY_PASSWORD AZURE_SIGN_ENDPOINT AZURE_SIGN_ACCOUNT AZURE_SIGN_PROFILE AZURE_SIGN_PUBLISHER AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+            [ -n "${!v:-}" ] || unset "$v"
+          done
+          signing=none
+          if [ -n "${CSC_LINK:-}" ]; then
+            signing=certificate
+          elif [ -n "${AZURE_SIGN_ENDPOINT:-}" ] && [ -n "${AZURE_SIGN_ACCOUNT:-}" ] && [ -n "${AZURE_SIGN_PROFILE:-}" ] && [ -n "${AZURE_SIGN_PUBLISHER:-}" ]; then
+            signing=azure
+          fi
+          echo "signing mode: $signing"
+          echo "### Signing mode: $signing" >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/package-windows.sh
+
+      - name: Checksums
+        working-directory: desktop/release
+        run: sha256sum ./*.exe | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ github.ref_type == 'tag' && 'bentopdf-native-windows-x64' || format('bentopdf-native-windows-x64-NOT-FOR-RELEASE-{0}-unresolved-notice-lines', steps.notice.outputs.count) }}
+          path: |
+            desktop/release/*.exe
+            desktop/release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Authenticode status (informational, unsigned builds are expected without secrets)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          Get-ChildItem desktop/release/*.exe | ForEach-Object {
+            $s = Get-AuthenticodeSignature $_.FullName
+            "$($_.Name): $($s.Status) $($s.SignerCertificate.Subject)" | Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Verify artifacts (extraction by 7-Zip)
+        if: ${{ !cancelled() }}
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          flags=()
+          [ "$IS_TAG" = true ] && flags+=(--release)
+          # electron-builder does not write its effective config here; scan the resolved config object instead.
+          cfg="$(cygpath -u "$RUNNER_TEMP")/win-builder-config.json"
+          (cd desktop && node -e "require('fs').writeFileSync(process.argv[1], JSON.stringify(require('./electron-builder.win.config'), null, 1))" "$(cygpath -m "$cfg")")
+          for f in desktop/release/*-setup-*.exe desktop/release/*-portable-*.exe; do
+            [ -f "$f" ] || { echo "::error::no artifact matches the glob (got '$f')"; exit 1; }
+            bash packaging/verify-artifact-win.sh "${flags[@]}" --config "$cfg" "$f"
+          done
+          bash packaging/verify-artifact-win.sh "${flags[@]}" --config "$cfg" --tree desktop/release/win-unpacked --kind unpacked
+
+      - name: Mutation test of the gate
+        if: ${{ !cancelled() }}
+        run: |
+          bash packaging/test-verify-artifact-win.sh --seed desktop/release/win-unpacked \
+            --installer "$(ls desktop/release/*-setup-*.exe)" --portable "$(ls desktop/release/*-portable-*.exe)"
+
+      - name: Install, smoke test and uninstall (runs the real installer on this runner)
+        if: ${{ !cancelled() }}
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          flags=()
+          [ "$IS_TAG" = true ] && flags+=(--release)
+          bash packaging/windows/smoke-installer.sh "$(ls desktop/release/*-setup-*.exe)" "$(ls desktop/release/*-portable-*.exe)" "${flags[@]}"
+
+      # KNOWN FAILURE (issue #11): the portable exe's second instance does not forward its file, and the portable
+      # cannot enter test mode (its stub wipes the extraction directory, so no marker can be placed). The smoke
+      # script exits 3 ONLY for that signature (first instance healthy, second launch hung or forwarding
+      # unobservable); portable-second-step.sh turns 3 into a loud 'KNOWN FAILURE #11' summary line and a green
+      # step, and EVERYTHING else (crash, missing exe, any other exit code, a timeout elsewhere) into a red step.
+      # The installed second-instance checks stay BLOCKING in the smoke step above.
+      - name: Portable second-instance (issue #11: exit 3 = known, anything else = red)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: bash packaging/windows/portable-second-step.sh bash packaging/windows/smoke-installer.sh --portable-second-instance "$(ls desktop/release/*-portable-*.exe)"
+
+      - name: Lint
+        if: ${{ !cancelled() }}
+        working-directory: desktop
+        run: npm run lint
+
+      - name: Enforce unit test result
+        if: ${{ !cancelled() }}
+        run: |
+          [ "${{ steps.unit.outcome }}" = success ] || { echo "::error::desktop unit tests failed on Windows (outcome: ${{ steps.unit.outcome }})"; exit 1; }
