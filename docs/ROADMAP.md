@@ -62,7 +62,7 @@ operates on the document in the active tab. Fully offline.
 |---|---|---|
 | M1 | Local-bundle build: pinned upstream + patches, all WASM/Tesseract/fonts same-origin, Simple Mode, no non-essential network, Hyper Compress/Kura excluded. Default upstream build and tests still pass. Size report. | local build + test run + grep for external URLs |
 | M2 | Thin Electron shell: transport chosen by experiment (privileged scheme vs loopback), COOP/COEP, `crossOriginIsolated`, workers, LibreOffice WASM, `sw.js`; document handoff proven. | local (needs display; xvfb absent: use headless Electron flags) |
-| M3 | Acrobat shell: tabs, viewer, sidebar mapped to tool categories, recents, native menus/shortcuts/print/dialogs, file association, gap analysis vs Acrobat Pro. | local |
+| M3 | Acrobat shell: tabs, viewer, sidebar mapped to tool categories, recents, native menus/shortcuts/print/dialogs, file association, gap analysis vs Acrobat Pro. First slice M3a done (see "M3 status"); viewer, print, adapters beyond Merge PDF open. | local, headless only so far |
 | M4 | Packaging: AppImage/.deb/Flatpak (local), DMG universal + NSIS/portable (CI only), optional notarization env vars. 100+ MB PDF and multi-page OCR memory report. | Linux local; macOS/Windows CI-built, NOT verified locally |
 | M5 | PWA hardening: icons, precache, header configs, SW COOP/COEP fallback. Small; desktop is primary. | local |
 | M6 | Android (Capacitor): COOP/COEP via shouldInterceptRequest, save/share, minimal permissions, F-Droid metadata. Needs Android SDK (ANDROID_HOME unset here). | build local if SDK installable; device tests may be unverifiable |
@@ -85,6 +85,89 @@ Signing keys/certs are never committed; env vars or CI secrets only.
 - **Cap live views and memory.** One LibreOffice run is about 1.7 GiB RSS
   (docs/m2-findings.md); N tabs cannot each keep a live engine. Define a limit
   and an eviction policy.
+
+## M3 status (first slice "M3a", details in [shell.md](shell.md))
+
+`[x]` = implemented and covered by a passing test on the dev host (headless,
+Electron 45.1.0); `[ ]` = not done. Nothing here was seen in a visible window.
+
+- [x] Tabs: one `WebContentsView` per tab in one window, each in its own
+  in-memory partition (`bento-tab-<id>`) with the full default-session
+  treatment (scheme handler + COOP/COEP/CORP + CSP, permission lock, non-app
+  requests cancelled). Per tab: `crossOriginIsolated`, the M2 bridge, the
+  permission lock and storage isolation (tab/tab and tab/shell) are e2e-tested.
+- [x] Live-view cap (default 3) with discard and reload-on-activation that
+  re-hands the document (policy unit-tested, discard/reload e2e-tested).
+  Count-based, not memory-based.
+- [x] Main-process document store (validated paths only, ids to renderers) and
+  shell IPC gated to the registered shell WebContents, with hostile-input tests.
+- [x] Tool sidebar derived from `dist` (129 entries, 118 with upstream's
+  category), search, recent files (10, re-validated on open).
+- [x] Handoff of the active document into a tool page via a per-tool adapter;
+  proven for **Merge PDF only**.
+- [x] Menus: File (Open, Open Recent, Close Tab, Quit), Tab (Next/Previous,
+  Ctrl+Tab), View (Reload Tool, zoom), Help (About + AGPL source offer).
+  Template unit-tested; never clicked.
+- [ ] A PDF viewer of our own (a document tab shows upstream's landing page).
+- [ ] Tool results back into the store (output still leaves via the page's own
+  download; "documents by id in and out" from the design notes is not built).
+- [ ] Adapters verified for tools other than Merge PDF.
+- [ ] Print, drag and drop onto the window, native save-as from the shell.
+- [ ] Categories mapped to Acrobat-style task groups (upstream's sections used).
+- [ ] Persisted per-tab settings (partitions are in-memory: upstream settings in
+  `localStorage` do not survive a tab or a restart).
+
+Mutation checks (each mutation applied alone, then reverted; it must make a
+test fail):
+
+| Mutation | Result |
+|---|---|
+| Shell IPC sender: drop the WebContents id check | RED: shell-ipc unit + e2e shellIpcReject |
+| Shell IPC sender: drop the origin check | RED: shell-ipc unit |
+| Tab partition: skip `lockSession` | RED: e2e shellTabs |
+| Tab partition: skip the whole setup before the view is created | RED: e2e shellTabs |
+| All tabs share one partition | RED: e2e shellTabs |
+| `openTool`: document id not checked against the store | RED: shell-ipc unit |
+| Recents: hostile entries kept | RED: shell-store unit |
+| Handoff grant: file identity (`dev`/`ino`) not compared | RED: ipc unit |
+| Memory cap ignored | RED: shell-tabs unit + e2e shellMemcap |
+| Registry: excluded pages listed | RED: shell-registry unit |
+| Store: path not validated | RED: shell-store unit |
+
+**NOT VERIFIED (M3a):**
+
+- A visible window was never seen (headless only, the M2 display gate above
+  still applies); layout, focus, shortcuts and menus were never exercised by a
+  person or a real input event.
+- Print; annotate/edit in a viewer; redaction; signing flows; any tool other
+  than Merge PDF receiving the document.
+- macOS and Windows (menus use `CmdOrCtrl`, `appMenu` on macOS: untested).
+- Memory under real tab load (several heavy tools open at once).
+- Packaged builds were not rebuilt; `test/packaged-smoke.js` was adapted to the
+  shell but not run; serving `src/shell/ui` from inside `app.asar` is untested.
+
+### Gap analysis vs Acrobat Pro (honest, by feature)
+
+"Upstream tool" = a BentoPDF page reachable from the sidebar. None of these
+has been checked for Acrobat-level fidelity; only Merge PDF receives the open
+document automatically today.
+
+| Acrobat Pro feature | BentoPDF (v2.8.10) | Notes |
+|---|---|---|
+| View (continuous viewer, thumbnails, search) | partial: `edit-pdf` (PDF Editor, EmbedPDF) views and searches; no standalone viewer page | no shell viewer yet |
+| Annotate / comment | `edit-pdf`, `add-stamps`, `remove-annotations` | not driven in any test |
+| Edit text | `edit-pdf-text` ("live reflow" per upstream) | Acrobat-grade reflow editing: not claimed |
+| Organize pages | `organize-pdf`, `pdf-multi-tool`, `rotate-pdf`, `delete-pages`, `extract-pages`, `add-blank-page`, `reverse-pages` | |
+| Combine / split | `merge-pdf` (handoff tested), `alternate-merge`, `split-pdf` | |
+| OCR | `ocr-pdf` (Tesseract) | 1-page OCR measured in M2 only |
+| Forms | `form-filler`, `form-creator` | |
+| Sign | `sign-pdf` (visual signature), `digital-sign-pdf`, `validate-signature-pdf` | digital sign has external timestamp/CORS calls that are only CSP-blocked (M2 findings) |
+| Redact | upstream says `edit-pdf` can redact; no dedicated page | NOT VERIFIED that content is removed, not covered |
+| Compare | `compare-pdfs` | |
+| Export (Word, Excel, images, text) | `pdf-to-word`, `pdf-to-excel`, `pdf-to-jpg`/`png`/`tiff`/`webp`/`svg`, `pdf-to-text`, `pdf-to-markdown`, ... | |
+| Protect | `protect-pdf`, `change-permissions`, `unlock-pdf`, `remove-restrictions`, `sanitize-pdf`, `remove-metadata` | |
+| Print | not in BentoPDF | needs shell work (M3b) |
+| Cloud, sharing, review workflows, accessibility checker, preflight | not in BentoPDF | out of scope |
 
 ## M4 entry criteria (do not start packaging before these have an answer)
 

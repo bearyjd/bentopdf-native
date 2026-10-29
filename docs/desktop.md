@@ -2,8 +2,9 @@
 
 Status: M2 prototype plus M4 Linux packaging
 ([desktop-linux.md](desktop-linux.md)). A thin, locked-down Electron window that
-serves the offline bundle in `./dist`. The Acrobat-style UI is M3. There is no
-auto-update.
+serves the offline bundle in `./dist`. Since M3a, `npm start` opens the tabbed
+shell (tabs, tool sidebar, recents, menus; see [shell.md](shell.md)); everything
+below still describes each tool tab. There is no auto-update.
 Measured results and open problems: [m2-findings.md](m2-findings.md).
 
 ## Prerequisites
@@ -44,7 +45,8 @@ Narrow it with `BENTO_E2E_TRANSPORTS=scheme` and `BENTO_E2E_SCENARIOS=isolation,
 | `src/ipc.js`, `channels.js`, `preload.js` | the file bridge (`window.bentoDesktop`) |
 | `src/open-file.js`, `src/menu.js` | OS "open with" paths (argv, second instance) validated and turned into grants; minimal Help/About menu |
 | `tools/`, `electron-builder.yml` | packaging: fuse hook and checker, Linux targets (see desktop-linux.md) |
-| `test/` | unit tests and the Electron scenario runner |
+| `src/shell/` | the tabbed shell (M3a): window, tabs/partitions, document store, recents, registry, menus; see [shell.md](shell.md) |
+| `test/` | unit tests and the Electron scenario runners (`runner/main.js` M2 window, `runner/shell-main.js` shell) |
 
 ## Security model
 
