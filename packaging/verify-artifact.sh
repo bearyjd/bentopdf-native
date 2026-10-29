@@ -17,6 +17,9 @@
 # sandbox-off env; deb/rpm post-install policy; Flatpak permissions; file modes (nothing
 # group/world-writable, nothing setuid or setgid, chrome-sandbox exactly 0755 and absent
 # from the Flatpak). Names come from desktop/brand.json.
+# Packaged test mode: the packaged test-mode.js / argv-policy.js are RUN (desktop/tools/check-asar-policy.js), not just
+# grepped, and no .bento-test-mode may exist. deb/rpm launchers start the binary with no env scrub, so for them the
+# root-owned install tree (every entry root:root, nothing group/world-writable) is the only defence: see docs/desktop-linux.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

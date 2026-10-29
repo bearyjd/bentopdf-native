@@ -179,7 +179,9 @@ Final fix round (each mutation applied alone to the worktree files, then restore
 | Packaged build honours `BENTO_TEST_HEADLESS` | RED: argv-policy unit |
 | AppRun / launcher stops unsetting `BENTO_TEST_HEADLESS` | RED: argv-policy unit; gate logic (`check_unset`) fails on a mutated AppRun (simulated; no artifact built) |
 | Policy honours the test switches in a packaged build without the marker (env alone / marker check removed) | RED: argv-policy unit (both variants) |
-| Marker accepted as a symlink / foreign owner / group-world-writable / any content | RED: test-mode unit (4 mutations; the redundant `isFile` check is covered by the size check, a mutation of it alone stays green) |
+| Marker accepted as a symlink / foreign owner / group-world-writable / any content / hard-linked / through a symlinked resources path / with `isFile` or the size check removed / without `O_NOFOLLOW` | RED: test-mode unit (each mutation alone; `isFile` and size are killed by the fake-`fs` cases, so they are not equivalent mutants). Removing only the `typeof uid` guard stays green: equivalent on POSIX, where a numeric uid never equals `null`/`undefined` |
+| Gate: `hasTestMarker` returns true / nlink, owner, mode, `O_NOFOLLOW`, token or realpath check removed / argv-policy marker condition dropped or made truthy / `main.js` passes a constant | RED: `test-verify-artifact.sh` (AppImage tree), each with its expected failure message |
+| Gate: real `process.env` read appended to an exempt line, `process["env"]`, `const { env } = process` | RED: gate (exact-line AST match); a comment mentioning `process.env` stays GREEN, as required |
 | Hash-only navigation: dropped handoff leaves 'Loading...' | RED: e2e shellHandoffHashNav |
 | Epoch guard removed / URL re-check removed | RED: e2e shellHandoffReload / shellHandoffUrlChanged; shellHandoffNavigated stays green under either one alone (the other guard catches it) |
 | Blocked-request URL / unsafe switches logged raw | RED: e2e shellBlockedUrlLog / main-entry |
