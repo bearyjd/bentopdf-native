@@ -105,6 +105,13 @@ PASSED=0 MISSED=0
 declare -a MISSED_NAMES=()
 TABLE=""
 
+# want_matches FIRST_FAIL_LINE WANT: WANT is a literal substring, or "re:<ERE>" for expectations whose
+# wording legitimately varies with the package layout (deb/rpm name files as opt/<App>/...).
+want_matches() {
+  local first="$1" want="$2"
+  if [[ "$want" == re:* ]]; then [[ "$first" =~ ${want#re:} ]]; else [[ "$first" == *"$want"* ]]; fi
+}
+
 # record NAME KIND GATE_RC WANT: a gate that passed is a miss; one that failed must say WANT in its first FAIL line.
 record() {
   local name="$1" kind="$2" rc="$3" want="$4" first
@@ -112,7 +119,7 @@ record() {
   if [ "$rc" = 0 ]; then
     MISSED=$((MISSED + 1)); MISSED_NAMES+=("$name [$kind]")
     TABLE+="$(printf '%-52s %-9s MISSED (gate passed)' "$name" "$kind")"$'\n'
-  elif [[ "$first" != *"$want"* ]]; then
+  elif ! want_matches "$first" "$want"; then
     MISSED=$((MISSED + 1)); MISSED_NAMES+=("$name [$kind] failed for another reason: ${first:-<no FAIL line>} (wanted: $want)")
     TABLE+="$(printf '%-52s %-9s WRONG REASON: %s' "$name" "$kind" "$(printf '%s' "$first" | cut -c1-90)")"$'\n'
   else
@@ -263,19 +270,19 @@ attempt_scripts() { # name kind file-in-scripts sed-expr|DELETE want
 }
 
 for k in $KINDS; do
-  attempt "remove LICENSES.chromium.html" $k m_rm_chromium_lic "missing or empty: LICENSES.chromium.html"
-  attempt "empty LICENSES.chromium.html" $k m_empty_chromium_lic "missing or empty: LICENSES.chromium.html"
-  attempt "remove LICENSE.electron.txt" $k m_rm_electron_lic "missing or empty: LICENSE.electron.txt"
-  attempt "remove NOTICE" $k m_rm_notice "missing or empty: resources/NOTICE"
-  attempt "empty NOTICE" $k m_empty_notice "missing or empty: resources/NOTICE"
-  attempt "remove SOURCE.txt" $k m_rm_source "missing or empty: resources/SOURCE.txt"
+  attempt "remove LICENSES.chromium.html" $k m_rm_chromium_lic "re:missing or empty: (.*/)?LICENSES\\.chromium\\.html"
+  attempt "empty LICENSES.chromium.html" $k m_empty_chromium_lic "re:missing or empty: (.*/)?LICENSES\\.chromium\\.html"
+  attempt "remove LICENSE.electron.txt" $k m_rm_electron_lic "re:missing or empty: (.*/)?LICENSE\\.electron\\.txt"
+  attempt "remove NOTICE" $k m_rm_notice "re:missing or empty: (.*/)?resources/NOTICE"
+  attempt "empty NOTICE" $k m_empty_notice "re:missing or empty: (.*/)?resources/NOTICE"
+  attempt "remove SOURCE.txt" $k m_rm_source "re:missing or empty: (.*/)?resources/SOURCE\\.txt"
   attempt "change SOURCE.txt commit" $k m_source_commit "does not name the built commit"
   attempt "SOURCE.txt says dirty=yes" $k m_source_dirty "was dirty"
   attempt "SOURCE.txt without repository URL" $k m_source_no_url "does not name the repository"
   attempt "SOURCE.txt without release tag line" $k m_source_no_tagline "no 'release tag:' line"
   attempt "SOURCE.txt without upstream commit" $k m_source_no_upstream "does not name the upstream commit"
   attempt "flip a fuse (RunAsNode on)" $k m_flip_fuse "RunAsNode"
-  attempt "remove all .desktop entries (empty glob)" $k m_rm_desktop "no .desktop file in the artifact"
+  attempt "remove all .desktop entries (empty glob)" $k m_rm_desktop "re:(no \\.desktop file in the artifact|found no desktop entry or launcher to scan for forbidden flags)"
   attempt "desktop entry loses MimeType" $k m_desktop_no_pdf "no MimeType=application/pdf"
   attempt "desktop Exec loses %f" $k m_desktop_no_percent_f "Exec does not end in %f"
   attempt "binary mode 0777" $k m_bin_0777 "group/world-writable"
