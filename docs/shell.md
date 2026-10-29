@@ -66,6 +66,9 @@ tab. In addition:
     frame-ancestors 'none'` plus the isolation headers.
   - Navigation pinning is per WebContents: the shell is pinned to
     `bento://shell`, every other WebContents to `bento://app`.
+- **The default session stays locked** (permissions denied, non-app requests
+  cancelled), as in M2, although nothing of the shell loads there; tested by a
+  view without a partition whose `data:` page is cancelled.
 - **Shell IPC arguments** are validated against main-process state: tool ids
   must be in the registry (Map lookups, so `__proto__` etc. are just unknown),
   document and recent ids must be UUIDs the main process issued, tab ids must be
@@ -80,6 +83,12 @@ tab. In addition:
   file are dropped). The renderer gets random per-run ids. Opening a recent
   re-runs the full `validateOpenPath`; a failure removes the entry. Never
   auto-opened at startup.
+
+Shell bridge (`window.bentoShell`): `listTools()`, `getState()` (tabs, open
+documents, recent files), `openTool(toolId, docId?)`, `switchTab(id)`,
+`closeTab(id)`, `openFileDialog()`, `openRecent(id)`, `onStateChanged(cb)`.
+There is no separate "recents" call: recent files come with `getState()` and
+every `stateChanged` push.
 
 ## Document handoff
 
@@ -173,5 +182,8 @@ WebContents has focus. macOS gets the `appMenu` role; `CmdOrCtrl` maps to Cmd.
 - Memory under real multi-tab load (the cap is unit- and e2e-tested by count only).
 - Print, annotation, text editing, redaction, signing in the shell.
 - macOS and Windows; packaged builds were not rebuilt. `test/packaged-smoke.js`
-  was adapted to the shell but not run; whether `src/shell/ui/` serves correctly
-  from inside `app.asar` is untested.
+  was adapted to the shell but not run. Serving from asar was only probed: the
+  `ui/` folder packed with `@electron/asar` and served by `serveStatic` in a
+  headless Electron (Electron 45.1.0, unpackaged, no fuses) gave 200 for
+  `shell.html`/`shell.js` with the right lengths and 404 for a missing file.
+  A real packaged build was not tried.

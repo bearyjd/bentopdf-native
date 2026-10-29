@@ -133,6 +133,7 @@ test fail):
 | Memory cap ignored | RED: shell-tabs unit + e2e shellMemcap |
 | Registry: excluded pages listed | RED: shell-registry unit |
 | Store: path not validated | RED: shell-store unit |
+| Default session left unlocked in shell mode | RED: e2e shellIpcReject |
 
 **NOT VERIFIED (M3a):**
 
@@ -144,7 +145,8 @@ test fail):
 - macOS and Windows (menus use `CmdOrCtrl`, `appMenu` on macOS: untested).
 - Memory under real tab load (several heavy tools open at once).
 - Packaged builds were not rebuilt; `test/packaged-smoke.js` was adapted to the
-  shell but not run; serving `src/shell/ui` from inside `app.asar` is untested.
+  shell but not run; serving `src/shell/ui` from an asar archive was only probed
+  outside a packaged build (200 for the shell files, see shell.md).
 
 ### Gap analysis vs Acrobat Pro (honest, by feature)
 
