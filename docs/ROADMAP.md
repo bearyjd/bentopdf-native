@@ -231,7 +231,8 @@ exit 2). (Superseded below: `test-verify-artifact.sh` was run for the AppImage t
   reach, and the root-owned install tree is defence in depth.
   The gate asserts `root:root` for every entry of a real `.deb`/`.rpm` (not available for `--tree`); that assertion
   was never run against a package built from this branch (fpm cannot build deb/rpm here).
-- **Issue #13 fixed by this PR (feat/t13-smoke-flavour): release builds contain no test-mode code.** Two build
+- **Issue #13 fixed by this PR (feat/t13-smoke-flavour): release builds have no test mode** (the test-mode module is
+  replaced by a stub; the test-only branches left in `main.js` are dead code behind the asserted flavour constant). Two build
   flavours from the same source (`BENTO_FLAVOUR`, `desktop/tools/flavour.js`): RELEASE (default, the only uploaded
   artifacts) packs a stub `src/test-mode.js` and `build-flavour.js = 'release'`; SMOKE (named
   `SMOKE-ONLY-NOT-FOR-DISTRIBUTION`, never uploaded, never signed) carries the marker-gated test mode for the

@@ -165,7 +165,7 @@ packaged build) the test-mode marker, are `--ozone-platform=headless`, `--remote
 Electron. A RELEASE build has no test-only switch at all. The AppRun and Flatpak launcher unset `BENTO_TEST_HEADLESS`, `BENTO_DIST` and `BENTO_TRANSPORT`
 for every normal launch.
 
-### Build flavours: release builds contain no test mode (issue #13)
+### Build flavours: release builds have no test mode (issue #13)
 
 Every build is one of two flavours, selected by `BENTO_FLAVOUR` when packaging (`desktop/tools/flavour.js`):
 
@@ -181,6 +181,12 @@ runs and unit tests). The swap is done in electron-builder's file list, before `
 selected flavour's. It is deliberately **not** done by rewriting `app.asar` in `afterPack`: electron-builder
 computes the asar integrity hash (the `EnableEmbeddedAsarIntegrityValidation` fuse) before `afterPack` runs
 (`app-builder-lib/out/platformPackager.js`), so a rewritten asar would no longer match it on Windows.
+
+What "no test mode" means precisely: the test-mode module (marker logic, test-only switch names, test variables)
+is **removed** from a release build: the stub replaces it. The test-only branches in `main.js` (hidden window,
+event log, trace, sandbox report) and the `BENTO_TRANSPORT=http` harness still ship, but are **provably dead**:
+they run only when `testModeOn(...)` is true or when the `BENTO_*` overrides are read, and both are false for the
+release flavour constant, which the gate asserts byte for byte.
 
 In the release flavour, test mode is off by two independent facts: the stub (no marker is ever read, no
 switch is test-only, no variable is honoured), and `testModeOn` in `src/argv-policy.js`, which `main.js` also
@@ -204,7 +210,9 @@ A packaged SMOKE build honours test mode only if **both** the environment variab
 resources path is its own real path (no symlinked directory), the marker opens with `O_NOFOLLOW` (a
 symlink fails), `fstat` on that descriptor says regular file, exactly one hard link, owned by the current
 user, not group/world-writable, exactly 19 bytes, and the content is exactly `bento-test-mode-v1\n`.
-Anything else, including any error, means "not test mode". Unit tests cover each check alone (a fake `fs`
+Anything else, including any error, means "not test mode". One exception, accepted only because the smoke build
+is never distributed: a smoke binary started under the name `electron` counts as unpackaged and enters test mode on
+the environment alone (measured above). Unit tests cover each check alone (a fake `fs`
 isolates `isFile`, `nlink`, owner, mode and size, which real files cannot) and were mutation-checked.
 `size` and `isFile` are not equivalent mutants once the fake `fs` is used; against a real filesystem the
 content comparison and the file type already reject what they would reject.

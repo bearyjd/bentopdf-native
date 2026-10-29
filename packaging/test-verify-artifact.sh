@@ -361,7 +361,9 @@ for entry in "${RELEASE_MUTATIONS[@]}"; do
 done
 for entry in "${POLICY_MUTATIONS[@]}"; do
   IFS='|' read -r fm_name FM_FILE FM_EXPR <<<"$entry"
-  attempt "$fm_name" smoke m_flavour_mutation "re:build flavour|packaged marker logic"
+  # The stub packed into a smoke build fails on the flavour check; every marker-logic mutation on the behaviour.
+  case "$fm_name" in smoke:*) fm_want="build flavour: smoke src/test-mode.js is the release stub" ;; *) fm_want="packaged marker logic" ;; esac
+  attempt "$fm_name" smoke m_flavour_mutation "$fm_want"
 done
 m_none() { :; }
 attempt "release AppImage gated as smoke" appimage m_none "build flavour: src/build-flavour.js is not the smoke flavour file" --flavour smoke

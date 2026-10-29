@@ -174,9 +174,11 @@ OS-level sandbox, **only proven if the Windows run succeeded**.
 As on Linux (`docs/desktop-linux.md`, "Build flavours"), `BENTO_FLAVOUR=release` (default) packs the stub
 `desktop/flavours/release/test-mode.js` and `build-flavour.js = 'release'`: a RELEASE installer/portable has no
 marker logic, no test-only switch and no honoured test variable, and `testModeOn` refuses test mode in the release
-flavour even when `app.isPackaged` is false (Electron derives it from the executable name, so a signed
-`BentoPDF Native.exe` copied as `electron.exe` would otherwise count as unpackaged, where the environment alone
-used to enable test mode). This closes the scenario of the PR #12 security review: malware that writes the marker
+flavour even when `app.isPackaged` is false. That Electron derives it from the executable name, so that a signed
+`BentoPDF Native.exe` copied as `electron.exe` would count as unpackaged (where the environment alone used to enable
+test mode), is inferred from Electron's source and measured on Linux only; it was NOT measured on Windows, and
+`--mode release-refusal` passes whether or not the flag flipped there. The test-mode module is removed from a release
+build; the test-only branches of `main.js` still ship but are dead code (see the Linux document). This closes the scenario of the PR #12 security review: malware that writes the marker
 and sets the variable next to a validly signed release executable gets no test mode, no hidden window and no
 accepted debug-port switch. `BENTO_FLAVOUR=smoke npm run dist:win` builds the SMOKE installer/portable into
 `desktop/release-smoke/` (names carry `SMOKE-ONLY-NOT-FOR-DISTRIBUTION`); CI builds it in the same job, gates it with
