@@ -46,6 +46,10 @@ const WINDOWS_DEVICE = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9\u00b9\u00b2\u
  * `_headers.` would open `_headers`), 8.3 short names (`_HEADE~1`) and device names.
  * Refused on EVERY platform: the bundle contains no such names (checked), and one rule
  * set is testable everywhere. Runs on the decoded URL path, before any file system call.
+ * The cross-platform strictness is INTENTIONAL: the packaged app must serve the same URL space on every OS,
+ * so a name that Windows would alias (and a Linux build would serve) is a 404 everywhere. The price is that
+ * a bundle asset with such a name could never be served; tools/check-dist-names.js (run by scripts/check-dist.sh
+ * and test/dist-names.test.js) fails the build if one ever appears.
  */
 function isWindowsUnsafeSegment(segment) {
   if ([...segment].some((c) => c.charCodeAt(0) < 32)) return true;

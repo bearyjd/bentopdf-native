@@ -4,6 +4,7 @@
 #  - separately licensed products (hyper-compress-wasm, Kura) must not be present
 #  - AGPL source offer files (SOURCE.txt, LICENSE, NOTICE) must be present
 #  - generated CSP must not allow any external origin
+#  - no bundle path may trip the Windows-unsafe name rules the desktop file server applies on every platform
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,4 +34,7 @@ if [ -f "$DIST/_headers" ]; then
   [ "$rc" -le 1 ] || die "grep failed on _headers"
   [ -z "$hits" ] || die "_headers CSP still allows external origins"
 fi
+# The desktop file server refuses Windows-unsafe names on every platform: no bundle path may trip them.
+command -v node >/dev/null || die "node is required for the bundle path-name check"
+node "$ROOT/desktop/tools/check-dist-names.js" "$DIST" >/dev/null || die "a bundle path trips the Windows-unsafe name rules (desktop/tools/check-dist-names.js)"
 echo "check-dist: OK ($DIST)"
