@@ -12,7 +12,7 @@ const { describe, it } = require('node:test');
 
 const electronBinary = require('electron');
 const resultsDir = path.join(__dirname, '..', '.test-results');
-const SCENARIOS = ['shellTabs', 'shellHandoff', 'shellHandoffError', 'shellMemcap', 'shellIpcReject', 'shellLifecycle', 'shellTeardown'];
+const SCENARIOS = ['shellTabs', 'shellHandoff', 'shellHandoffError', 'shellHandoffNavigated', 'shellMemcap', 'shellIpcReject', 'shellLifecycle', 'shellTeardown'];
 const only = process.env.BENTO_E2E_SCENARIOS;
 const selected = only ? SCENARIOS.filter((s) => only.split(',').includes(s)) : SCENARIOS;
 const enabled = (process.env.BENTO_E2E_TRANSPORTS || 'scheme').split(',').includes('scheme');
@@ -26,7 +26,7 @@ function runShell(scenario) {
     encoding: 'utf8',
     timeout: 5 * 60 * 1000,
   });
-  if (!fs.existsSync(out)) throw new Error(`electron produced no result file (status ${run.status}): ${(run.stderr || '').slice(-800)}`);
+  assert.ok(fs.existsSync(out), `scenario ${scenario}: electron produced no result file (exit status ${run.status}, signal ${run.signal}): ${(run.stderr || '').slice(-800)}`);
   return JSON.parse(fs.readFileSync(out, 'utf8'));
 }
 
@@ -35,6 +35,7 @@ describe('shell e2e [scheme]', { skip: !enabled }, () => {
     it(name, (t) => {
       const report = runShell(name);
       assert.ok(!report.fatal, report.fatal);
+      assert.ok(Array.isArray(report.results) && report.results.length === 1, `scenario ${name}: expected exactly one result, got ${JSON.stringify(report).slice(0, 400)}`);
       const [result] = report.results;
       t.diagnostic(JSON.stringify(result.detail ?? result.error).slice(0, 2000));
       assert.ok(result.ok, `${result.error} ${JSON.stringify(result.blocked || [])}`);

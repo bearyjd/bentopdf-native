@@ -24,9 +24,10 @@ function contentBounds(win) {
  * Electron ViewAdapter for the tab manager: one WebContentsView per live tab,
  * in the tab's own partition (prepared by `prepare(ses)` before anything
  * loads), with the M2 tool preload and web preferences, as a child of `win`.
- * `onNavigated(tabId, pathname)` reports in-page navigation to another tool.
+ * `onNavigated(tabId, pathname)` reports in-page navigation to another tool; `onNavigating(tabId)`
+ * every main-frame navigation as it starts (also same-document ones).
  */
-function createViewAdapter({ win, origin, prepare, log, allowUrl, onNavigated = () => {} }) {
+function createViewAdapter({ win, origin, prepare, log, allowUrl, onNavigated = () => {}, onNavigating = () => {} }) {
   const tabOf = new Map(); // view -> tab id
   const relayout = () => {
     for (const view of tabOf.keys()) view.setBounds(contentBounds(win));
@@ -50,6 +51,12 @@ function createViewAdapter({ win, origin, prepare, log, allowUrl, onNavigated = 
         log,
         allowUrl
       );
+      wc.on('did-start-navigation', (details) => {
+        if (details.isMainFrame) onNavigating(tab.id);
+      });
+      wc.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+        if (isMainFrame) onNavigating(tab.id);
+      });
       wc.on('did-navigate', (_event, url) => {
         if (url.startsWith(`${origin}/`)) onNavigated(tab.id, new URL(url).pathname);
       });

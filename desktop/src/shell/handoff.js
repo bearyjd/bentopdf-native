@@ -12,6 +12,16 @@ const ADAPTERS = new Map([
 
 const adapterFor = (toolId) => Object.freeze({ toolId, ...(ADAPTERS.get(toolId) || DEFAULT_ADAPTER) });
 
+/** True when `url` is `page` (a path such as `/merge-pdf.html`) of `origin` (`bento://app`); query and hash ignored. */
+function isTargetPage(url, origin, page) {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}` === origin && u.pathname === page;
+  } catch {
+    return false;
+  }
+}
+
 const INPUT_WAIT_MS = 30000;
 // Upstream pages attach their `change` listeners in module code that can run
 // after the input exists; the M2 handoff scenario needed the same pause.
@@ -37,4 +47,4 @@ function handoffScript(entries, adapter, { waitMs = INPUT_WAIT_MS, settleMs = SE
   })()`;
 }
 
-module.exports = { adapterFor, handoffScript, DEFAULT_ADAPTER, SETTLE_MS };
+module.exports = { isTargetPage, adapterFor, handoffScript, DEFAULT_ADAPTER, SETTLE_MS };

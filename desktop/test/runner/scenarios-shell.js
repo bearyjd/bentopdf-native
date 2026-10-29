@@ -170,6 +170,39 @@ async function shellHandoff(ctx) {
   return { listed, handoffs, returnedAfterMs, network: assertNoExternalRequests(ctx) };
 }
 
+/**
+ * A handoff that is still waiting (here: held in the beforeInject seam, where the grant is done) when
+ * its tab navigates in-view to another tool must NOT inject into the new page, record a success or
+ * leave an error behind.
+ */
+async function shellHandoffNavigated(ctx) {
+  const { handle, hooks } = ctx;
+  const opened = await openPdfs(ctx, ['stale.pdf']);
+  let navigatedTo = null;
+  hooks.beforeInject = async ({ tabId }) => {
+    if (navigatedTo) return;
+    const wc = handle.tabs.viewOf(tabId).webContents;
+    await wc.loadURL('bento://app/split-pdf.html'); // as a link click inside the page would
+    navigatedTo = wc.getURL();
+  };
+  await mustCall(handle, `window.bentoShell.openTool('merge-pdf', ${JSON.stringify(opened.docs[0].id)})`);
+  for (let i = 0; i < 100 && !navigatedTo; i += 1) await sleep(100);
+  if (!navigatedTo) throw new Error('the handoff never reached the injection seam');
+  await sleep(4000); // longer than the settle delay a (wrongly) injected script would wait
+  const tab = handle.tabs.list().find((t) => t.active);
+  const wc = handle.tabs.viewOf(tab.id).webContents;
+  const injected = await js(wc, `Array.from(document.querySelectorAll('input[type="file"]')).reduce((n, i) => n + i.files.length, 0)`);
+  const status = (await mustCall(handle, 'window.bentoShell.getState()')).tabs.find((t) => t.id === tab.id).status;
+  const problems = [];
+  if (!navigatedTo.endsWith('/split-pdf.html')) problems.push(`navigated to ${navigatedTo}`);
+  if (injected !== 0) problems.push(`${injected} file(s) were injected into the second page`);
+  if (handle.handoffs.length !== 0) problems.push(`a stale handoff was recorded ${JSON.stringify(handle.handoffs)}`);
+  if (status !== null) problems.push(`status ${JSON.stringify(status)}`);
+  if (tab.toolId !== 'split-pdf') problems.push(`tab tool ${tab.toolId}`);
+  if (problems.length) throw new Error(problems.join(' | '));
+  return { navigatedTo };
+}
+
 /** A failed handoff must reach the shell UI state, and the IPC must return before the handoff ends. */
 async function shellHandoffError(ctx) {
   const { handle } = ctx;
@@ -367,4 +400,4 @@ async function shellTeardown(ctx) {
   return { resizeBefore, resizeAtDestroy };
 }
 
-module.exports = { shellTabs, shellHandoff, shellHandoffError, shellMemcap, shellIpcReject, shellLifecycle, shellTeardown };
+module.exports = { shellTabs, shellHandoff, shellHandoffError, shellHandoffNavigated, shellMemcap, shellIpcReject, shellLifecycle, shellTeardown };

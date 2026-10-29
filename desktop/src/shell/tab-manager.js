@@ -9,7 +9,7 @@ const partitionFor = (id) => `bento-tab-${id}`;
 
 /**
  * @typedef {{id: number, partition: string, page: string, toolId: string|null, docId: string|null,
- *            lastActive: number, live: boolean}} Tab
+ *            lastActive: number, live: boolean, epoch: number}} Tab
  * @typedef {{create(tab: Tab): object, load(view: object, page: string): Promise<void>,
  *            show(view: object): void, hide(view: object): void, destroy(view: object): void}} ViewAdapter
  */
@@ -23,6 +23,9 @@ const partitionFor = (id) => `bento-tab-${id}`;
  * (document handoff) when activated. `onLoaded` is started once the page has
  * loaded but NOT awaited: a slow handoff must not block activate/open/navigate
  * (its failures are its own to report; a rejection lands in `onError`).
+ * `epoch` counts the tab's navigations (navigate(), and `noteNavigation` for every main-frame
+ * navigation of its view); a handoff compares it with the value it started with and drops
+ * itself when the page it was meant for is gone.
  * Tab records are frozen and replaced, never mutated.
  */
 function createTabManager({ views, liveBudget = LIVE_VIEW_BUDGET, onLoaded = async () => {}, onChange = () => {}, onError = () => {} }) {
@@ -93,7 +96,7 @@ function createTabManager({ views, liveBudget = LIVE_VIEW_BUDGET, onLoaded = asy
   async function open({ page = DEFAULT_PAGE, toolId = null, docId = null } = {}) {
     const id = nextId;
     nextId += 1;
-    set({ id, partition: partitionFor(id), page, toolId, docId, lastActive: 0 });
+    set({ id, partition: partitionFor(id), page, toolId, docId, lastActive: 0, epoch: 0 });
     await activate(id);
     return tabs.get(id);
   }
@@ -102,7 +105,7 @@ function createTabManager({ views, liveBudget = LIVE_VIEW_BUDGET, onLoaded = asy
   async function navigate(id, { page, toolId = null, docId = null }) {
     const tab = tabs.get(id);
     if (!tab) throw new Error('unknown tab');
-    const next = set({ ...tab, page, toolId, docId });
+    const next = set({ ...tab, page, toolId, docId, epoch: tab.epoch + 1 });
     enforceCap(); // the new tool may weigh more than the old one
     if (live.has(id)) await loadInto(next);
     else if (id === activeId) await activate(id);
@@ -112,9 +115,18 @@ function createTabManager({ views, liveBudget = LIVE_VIEW_BUDGET, onLoaded = asy
   /** The page navigated itself (e.g. a link to another tool): remember it for reloads. */
   function recordPage(id, page, toolId = null) {
     const tab = tabs.get(id);
-    if (!tab || tab.page === page) return;
-    set({ ...tab, page, toolId });
+    if (!tab) return;
+    const moved = set({ ...tab, epoch: tab.epoch + 1 });
+    if (moved.page === page) return;
+    set({ ...moved, page, toolId });
+    enforceCap(); // the new page may weigh more than the old one
     onChange();
+  }
+
+  /** The view started a main-frame navigation: whatever was meant for the old page is stale. */
+  function noteNavigation(id) {
+    const tab = tabs.get(id);
+    if (tab) set({ ...tab, epoch: tab.epoch + 1 });
   }
 
   async function close(id) {
@@ -153,6 +165,7 @@ function createTabManager({ views, liveBudget = LIVE_VIEW_BUDGET, onLoaded = asy
     activate,
     navigate,
     recordPage,
+    noteNavigation,
     close,
     closeAll,
     next: () => cycle(1),

@@ -18,7 +18,7 @@ const { pushCapped, addCapped, createLogLimiter, serialByKey } = require('./boun
 const { isPermanentOpenFailure } = require('./recents');
 const { registerShellIpc } = require('./shell-ipc');
 const { SHELL_CHANNELS } = require('./shell-channels');
-const { adapterFor, handoffScript } = require('./handoff');
+const { adapterFor, handoffScript, isTargetPage } = require('./handoff');
 
 const APP_ORIGIN = 'bento://app';
 const SHELL_PARTITION = 'bento-shell'; // in-memory, like every tab partition
@@ -34,10 +34,11 @@ const log = (message) => process.stderr.write(`[bento] ${message}\n`);
  * M2 tool preload). Scheme transport only.
  * @param {{distDir: string, dialogs?: object, show?: boolean, liveBudget?: number, homeTab?: boolean,
  *          recentsFile?: string, onSession?: (ses: object, partition: string) => void,
- *          onStateChanged?: (state: object) => void}} options
+ *          onStateChanged?: (state: object) => void, beforeInject?: (info: object) => Promise<void>}} options
+ * `beforeInject` is a test seam: awaited after the document grant and before the page check that precedes injection.
  */
 async function startShell(options) {
-  const { distDir, dialogs = dialog, show = true, liveBudget, homeTab = true, onSession = () => {}, onStateChanged = () => {} } = options;
+  const { distDir, dialogs = dialog, show = true, liveBudget, homeTab = true, onSession = () => {}, onStateChanged = () => {}, beforeInject = async () => {} } = options;
   const rootReal = fs.realpathSync(distDir);
   if (!fs.existsSync(path.join(rootReal, 'index.html'))) throw new Error(`${rootReal} does not look like a BentoPDF bundle (no index.html)`);
   const headers = buildAppHeaders(rootReal);
@@ -136,13 +137,17 @@ async function startShell(options) {
       return;
     }
     const wc = view.webContents;
-    const latest = () => handoffSeq.get(tab.id) === seq && tabs.viewOf(tab.id) === view && !wc.isDestroyed();
+    // Superseded when a newer handoff started, the view was replaced, or the tab navigated (epoch).
+    const latest = () => handoffSeq.get(tab.id) === seq && tabs.viewOf(tab.id) === view && !wc.isDestroyed() && tabs.get(tab.id)?.epoch === tab.epoch;
     const toolName = registry.get(tab.toolId).name;
     setStatus(tab.id, { kind: 'loading', text: `Loading ${doc.name} into ${toolName}...` });
     try {
       const entry = doc.bytes
         ? toolIpc.grantBytes(wc, doc.name, doc.bytes)
         : await toolIpc.grantPath(wc, doc.filePath, { dev: doc.dev, ino: doc.ino });
+      await beforeInject({ tabId: tab.id, toolId: tab.toolId });
+      // Re-check right before injecting: the grant (or the settle delay) may have outlived the page.
+      if (!latest() || !isTargetPage(wc.getURL(), APP_ORIGIN, tab.page)) return;
       // userGesture=false: the page must not get transient user activation from us.
       const count = await wc.executeJavaScript(handoffScript([entry], adapterFor(tab.toolId)), false);
       if (!latest()) return;
@@ -182,7 +187,11 @@ async function startShell(options) {
     prepare: (ses, partition) => prepare(ses, partition),
     log,
     allowUrl,
-    onNavigated: (id, page) => tabs.recordPage(id, page, toolIdOfPage(page)),
+    onNavigated: (id, page) => {
+      tabs.recordPage(id, page, toolIdOfPage(page));
+      if (statuses.get(id)?.kind === 'loading') setStatus(id, null); // the handoff this belonged to is dropped
+    },
+    onNavigating: (id) => tabs.noteNavigation(id),
   });
   tabs = createTabManager({
     views,

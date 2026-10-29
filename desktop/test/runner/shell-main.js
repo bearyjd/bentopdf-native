@@ -28,11 +28,13 @@ async function runOne(name) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bento-shell-work-'));
   const dialogState = { next: [] };
   const requests = [];
+  const hooks = {}; // scenario-installed test seams
   const handle = await startShell({
     distDir,
     show: false,
     homeTab: false,
     liveBudget: scenarios[name].liveBudget,
+    beforeInject: async (info) => (hooks.beforeInject ? hooks.beforeInject(info) : undefined),
     dialogs: {
       showOpenDialog: async () => ({ canceled: false, filePaths: dialogState.next }),
       showSaveDialog: async () => ({ canceled: true }),
@@ -45,7 +47,7 @@ async function runOne(name) {
   });
   const started = Date.now();
   try {
-    const detail = await scenarios[name]({ handle, workDir, dialogState, requests });
+    const detail = await scenarios[name]({ handle, workDir, dialogState, requests, hooks });
     return { name, ok: true, ms: Date.now() - started, detail };
   } catch (err) {
     return { name, ok: false, ms: Date.now() - started, error: String(err.message || err), blocked: handle.blocked.slice(-6) };
@@ -54,6 +56,9 @@ async function runOne(name) {
     fs.rmSync(workDir, { recursive: true, force: true });
   }
 }
+
+// A scenario may destroy the window itself (shellTeardown); the process must still write its result.
+app.on('window-all-closed', () => {});
 
 app.whenReady().then(async () => {
   let payload;

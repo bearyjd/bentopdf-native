@@ -244,3 +244,50 @@ test('tabs: a throwing or rejecting onLoaded is reported through onError, not th
     assert.equal(errors.length, 1);
   }
 });
+
+// ---- final round: navigation epoch, recordPage weight ----
+
+const { isTargetPage } = require('../src/shell/handoff');
+
+test('tabs: every navigation (navigate, recordPage, noteNavigation) bumps the tab epoch; others are untouched', async () => {
+  const v = fakeViews();
+  const seen = [];
+  const tm = createTabManager({ views: v.adapter, onLoaded: async (tab) => seen.push(tab.epoch) });
+  await tm.open({ page: '/merge-pdf.html', toolId: 'merge-pdf', docId: 'd' });
+  await tm.open();
+  assert.equal(tm.get(1).epoch, 0);
+  assert.deepEqual(seen, [0, 0]);
+  await tm.navigate(1, { page: '/split-pdf.html', toolId: 'split-pdf', docId: 'd' });
+  assert.equal(tm.get(1).epoch, 1);
+  tm.recordPage(1, '/rotate-pdf.html', 'rotate-pdf');
+  assert.equal(tm.get(1).epoch, 2);
+  tm.recordPage(1, '/rotate-pdf.html', 'rotate-pdf'); // same page again (did-navigate after a reload): still a navigation
+  assert.equal(tm.get(1).epoch, 3);
+  tm.noteNavigation(1);
+  tm.noteNavigation(99); // unknown tab: ignored
+  assert.equal(tm.get(1).epoch, 4);
+  assert.equal(tm.get(2).epoch, 0, 'the other tab is untouched');
+});
+
+test('handoff: only the page the handoff was started for is a valid target', () => {
+  const o = 'bento://app';
+  assert.equal(isTargetPage('bento://app/merge-pdf.html', o, '/merge-pdf.html'), true);
+  assert.equal(isTargetPage('bento://app/merge-pdf.html?x=1#y', o, '/merge-pdf.html'), true);
+  assert.equal(isTargetPage('bento://app/split-pdf.html', o, '/merge-pdf.html'), false);
+  assert.equal(isTargetPage('bento://evil/merge-pdf.html', o, '/merge-pdf.html'), false);
+  assert.equal(isTargetPage('https://app/merge-pdf.html', o, '/merge-pdf.html'), false);
+  assert.equal(isTargetPage('', o, '/merge-pdf.html'), false);
+  assert.equal(isTargetPage(undefined, o, '/merge-pdf.html'), false);
+});
+
+test('tabs: a page that navigated itself to a heavy tool is re-weighed (recordPage enforces the cap)', async () => {
+  const v = fakeViews();
+  const tm = createTabManager({ views: v.adapter, liveBudget: 6 });
+  for (let i = 0; i < 3; i += 1) await tm.open({ page: '/index.html' });
+  assert.deepEqual(tm.list().map((t) => t.live), [true, true, true]);
+  tm.recordPage(3, '/word-to-pdf.html', 'word-to-pdf'); // 1 + 1 + 4 = 6: fits
+  assert.deepEqual(tm.list().map((t) => t.live), [true, true, true]);
+  tm.recordPage(2, '/excel-to-pdf.html', 'excel-to-pdf'); // 1 + 4 + 4 = 9 > 6: tab 1 goes, still 8 > 6: tab 2 goes too (the active tab never does)
+  assert.deepEqual(tm.list().map((t) => t.live), [false, false, true]);
+  assert.equal(tm.get(2).toolId, 'excel-to-pdf');
+});
