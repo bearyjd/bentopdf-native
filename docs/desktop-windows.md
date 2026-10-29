@@ -11,7 +11,7 @@ run named in the status section succeeded. Everything else says NOT VERIFIED.
 See "What was and was not verified" at the end. In short: the Windows build configuration was
 exercised on Linux up to the unpacked app (a real `win-unpacked` tree with fuses flipped; the NSIS
 step needs Wine and cannot run here); the installer, uninstaller, registry, shortcuts, marker-gated test mode
-and sandbox were exercised by `desktop-windows.yml` on `windows-latest`. **The last run (40845803115) is green**;
+and sandbox were exercised by `desktop-windows.yml` on `windows-latest`. **The last run (40853355808, on head 9d6b8e8, after the review fixes) is green; the earlier replay run was 40845803115**;
 the portable exe's second-instance forwarding (issue #11) runs as its own step whose exit code 3 (only the known
 signature) is listed as `KNOWN FAILURE #11` in the job summary and is NOT VERIFIED (the portable cannot enter test
 mode); any other portable failure turns the job red.

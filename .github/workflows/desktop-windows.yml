@@ -18,7 +18,7 @@ name: desktop-windows
 on:
   workflow_dispatch:
   push:
-    branches: [main, feat/m5-windows-on-main] # TEMPORARY: feat/m5-windows-on-main for verification, removed in the final commit
+    branches: [main]
     paths:
       - 'desktop/**'
       - 'packaging/**'
