@@ -263,16 +263,24 @@ async function shellHandoffReload(ctx) {
  */
 async function shellHandoffUrlChanged(ctx) {
   let calls = 0;
-  const r = await runDisturbedHandoff(ctx, 'url.pdf', async (wc) => {
-    wc.getURL = () => 'bento://app/split-pdf.html'; // instance property shadows the prototype method
-    const real = wc.executeJavaScript.bind(wc);
-    wc.executeJavaScript = (code, ...rest) => {
-      if (String(code).includes('handoffToInput')) calls += 1;
-      return real(code, ...rest);
-    };
-  });
-  delete r.wc.getURL;
-  delete r.wc.executeJavaScript;
+  let stubbed = null;
+  let r;
+  try {
+    r = await runDisturbedHandoff(ctx, 'url.pdf', async (wc) => {
+      stubbed = wc;
+      wc.getURL = () => 'bento://app/split-pdf.html'; // instance property shadows the prototype method
+      const real = wc.executeJavaScript.bind(wc);
+      wc.executeJavaScript = (code, ...rest) => {
+        if (String(code).includes('handoffToInput')) calls += 1;
+        return real(code, ...rest);
+      };
+    });
+  } finally {
+    if (stubbed) {
+      delete stubbed.getURL; // restore the prototype methods even when the scenario threw
+      delete stubbed.executeJavaScript;
+    }
+  }
   const problems = [];
   if (r.tab.epoch !== r.reached.epoch) problems.push(`epoch moved: ${r.reached.epoch} -> ${r.tab.epoch}`);
   if (calls !== 0 || r.injected !== 0 || r.handoffs !== 0) problems.push(`injected despite the URL change: calls=${calls} injected=${r.injected} recorded=${r.handoffs}`);
@@ -495,7 +503,11 @@ async function shellTeardown(ctx) {
     resizeAtDestroy = win.listenerCount('resize');
     realDestroy();
   };
-  await handle.close();
+  try {
+    await handle.close();
+  } finally {
+    delete win.destroy; // drop the instance stub so the prototype method is back
+  }
   const deadline = Date.now() + 5000;
   while (contents.some((wc) => !wc.isDestroyed()) && Date.now() < deadline) await sleep(100);
   const problems = [];
