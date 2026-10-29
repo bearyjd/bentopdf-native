@@ -64,7 +64,8 @@ process.stdout.write(`ok   process.env is read only on ${[...seen.values()].redu
 // ---- 2. behaviour of the shipped marker logic and argv policy --------------------------------------------
 const { hasTestMarker, MARKER_NAME, MARKER_CONTENT } = require(path.join(src, 'test-mode.js'));
 const { unsafeSwitches } = require(path.join(src, 'argv-policy.js'));
-const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bento-gate-')));
+// .native: on Windows the JS realpath keeps 8.3 short names (RUNNER~1), which the win32 marker check refuses.
+const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'bento-gate-')));
 const aliases = [];
 try {
   const marker = path.join(tmp, MARKER_NAME);
