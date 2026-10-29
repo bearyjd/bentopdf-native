@@ -116,3 +116,12 @@ test('sanitizeText: page-originated text is capped and loses control and bidi ch
   assert.equal(sanitizeText({ toString: () => 'obj\nline' }), 'obj line');
   assert.equal(sanitizeText('  padded  '), 'padded');
 });
+
+test('createLimitedLogger: limits per key, one notice, keys are independent, and the notice does not repeat the dropped text', () => {
+  const { createLimitedLogger, createLogLimiter } = require('../src/shell/bounded');
+  const lines = [];
+  const logLimited = createLimitedLogger((m) => lines.push(m), createLogLimiter({ limit: 2, now: () => 0 }));
+  for (let i = 0; i < 5; i += 1) logLimited('a', `line ${i}`);
+  logLimited('b', 'other key');
+  assert.deepEqual(lines, ['line 0', 'line 1', '(a) further log lines suppressed for a minute', 'other key']);
+});

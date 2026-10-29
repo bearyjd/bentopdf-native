@@ -43,6 +43,18 @@ function createLogLimiter({ limit = 20, windowMs = 60000, now = Date.now, maxKey
   };
 }
 
+/**
+ * `log` behind a per-key rate limit (createLogLimiter): `(key, message) => void`. The first line past the
+ * limit in a window becomes one notice, later ones are dropped. For text a page or a peer process can make us log.
+ */
+function createLimitedLogger(log, shouldLog = createLogLimiter()) {
+  return (key, message) => {
+    const verdict = shouldLog(key);
+    if (verdict === 'log') log(message);
+    else if (verdict === 'notice') log(`(${key}) further log lines suppressed for a minute`);
+  };
+}
+
 const MAX_TEXT = 300;
 // C0/C1 controls, DEL, line/paragraph separators and bidi overrides/isolates: no line breaks in logs, no spoofed status text.
 // eslint-disable-next-line no-control-regex -- matching control characters is the point
@@ -71,4 +83,4 @@ function serialByKey(task) {
   };
 }
 
-module.exports = { pushCapped, addCapped, createLogLimiter, serialByKey, sanitizeText, MAX_TEXT, DEFAULT_CAP };
+module.exports = { pushCapped, addCapped, createLogLimiter, createLimitedLogger, serialByKey, sanitizeText, MAX_TEXT, DEFAULT_CAP };

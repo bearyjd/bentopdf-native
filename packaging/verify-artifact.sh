@@ -145,11 +145,11 @@ pass "offline bundle is an extraResource outside app.asar; app.asar is $(stat -c
 ASAR="$ROOT/desktop/node_modules/.bin/asar"
 [ -x "$ASAR" ] || fail "asar tool missing (run npm ci in desktop/)"
 "$ASAR" extract "$ASAR_PATH" "$WORK/asar"
-for f in src/main.js src/menu.js src/argv-policy.js src/open-file.js brand.json; do
+for f in src/main.js src/menu.js src/argv-policy.js src/test-mode.js src/open-file.js brand.json; do
   [ -s "$WORK/asar/$f" ] || fail "app.asar lacks $f"
 done
 grep -q 'app.isPackaged ? {} : process.env' "$WORK/asar/src/main.js" || fail "main.js does not gate BENTO_* overrides on app.isPackaged"
-if grep -rn 'process\.env' "$WORK/asar/src" | grep -Ev 'src/main.js:.*(overrides = app.isPackaged|process\.env\[name\])|src/argv-policy.js:.*NEVER_MATCHES'; then
+if grep -rn 'process\.env' "$WORK/asar/src" | grep -Ev 'src/main.js:.*(overrides = app.isPackaged|process\.env\[name\]|unsafeSwitches\()|src/argv-policy.js:.*NEVER_MATCHES'; then
   fail "process.env is read somewhere other than the guarded overrides line, the sandbox-env refusal and the argv policy default"
 fi
 pass "BENTO_* overrides are read only through the app.isPackaged guard"
@@ -157,8 +157,9 @@ pass "BENTO_* overrides are read only through the app.isPackaged guard"
 grep -q "'ELECTRON_DISABLE_SANDBOX'" "$WORK/asar/src/main.js" && grep -q "'CHROME_DEVEL_SANDBOX'" "$WORK/asar/src/main.js" || fail "main.js does not refuse to start when ELECTRON_DISABLE_SANDBOX / CHROME_DEVEL_SANDBOX is set"
 grep -q 'app.exit(2)' "$WORK/asar/src/main.js" || fail "main.js has no exit-2 refusal"
 grep -q "require('./argv-policy')" "$WORK/asar/src/main.js" || fail "main.js does not load the argv policy"
-grep -qF 'unsafeSwitches(process.argv, overrides, { packaged: app.isPackaged })' "$WORK/asar/src/main.js" || fail "main.js does not check its own argv"
-grep -qF 'unsafeSwitches(argv, overrides, { secondInstance: true, packaged: app.isPackaged })' "$WORK/asar/src/main.js" || fail "main.js does not check second-instance argv"
+grep -qF 'unsafeSwitches(process.argv, process.env, policyOptions)' "$WORK/asar/src/main.js" || fail "main.js does not check its own argv"
+grep -qF 'unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true })' "$WORK/asar/src/main.js" || fail "main.js does not check second-instance argv"
+grep -qF 'packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath)' "$WORK/asar/src/main.js" || fail "main.js does not gate packaged test mode on the marker file"
 grep -q '%PDF-' "$WORK/asar/src/open-file.js" || fail "open-file.js does not check the %PDF- header"
 grep -q 'realpath' "$WORK/asar/src/open-file.js" || fail "open-file.js does not resolve symlinks"
 pass "argv policy (own and second-instance argv) and open-with header/symlink checks are present"
@@ -184,6 +185,11 @@ if [ -d "$SCRIPTS" ] && [ -n "$(ls -A "$SCRIPTS")" ]; then
   if grep -rEn -- "$FORBIDDEN" "$SCRIPTS"; then fail "forbidden flag in a maintainer script"; fi
 fi
 pass "no sandbox-off / devtools / inspect flags in app code, $SCANNED desktop entries or launchers, or maintainer scripts"
+
+# A release artifact must never carry the packaged test-mode marker (desktop/src/test-mode.js), anywhere in the tree.
+MARKERS="$(find "$OUT" -name .bento-test-mode -print 2>/dev/null | head -3)"
+[ -z "$MARKERS" ] || { printf '%s\n' "$MARKERS" >&2; fail "the test-mode marker .bento-test-mode is present in the artifact"; }
+pass "no .bento-test-mode marker anywhere in the artifact"
 
 # ---- desktop entries ----------------------------------------------------------
 DESKTOPS=0

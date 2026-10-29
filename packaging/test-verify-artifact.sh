@@ -166,11 +166,15 @@ asar_edit() { # tree file sed-expression
 m_about_no_warranty() { asar_edit "$1" src/menu.js 's/ABSOLUTELY NO WARRANTY/NOTHING/'; }
 m_about_no_source() { asar_edit "$1" src/menu.js 's/brand\.sourceUrl/"x"/g'; }
 m_about_no_agpl() { asar_edit "$1" src/menu.js 's/AGPL-3\.0-only/GPL/g'; }
+m_test_marker() { printf 'bento-test-mode-v1\n' > "$(resdir "$1")/.bento-test-mode"; }
+m_test_marker_root() { printf 'bento-test-mode-v1\n' > "$1/.bento-test-mode"; }
+m_test_marker_symlink() { ln -s /nonexistent "$(appdir "$1")/.bento-test-mode"; }
+m_marker_gate_gone() { asar_edit "$1" src/main.js 's/testMarker: app\.isPackaged && hasTestMarker\(process\.resourcesPath\)/testMarker: true/'; }
 m_env_override() { asar_edit "$1" src/main.js 's/app\.isPackaged \? \{\} : process\.env/process.env/'; }
 m_env_elsewhere() { asar_edit "$1" src/app.js '1a const leak = process.env.HOME;'; }
-m_argv_policy_gone() { asar_edit "$1" src/main.js 's/unsafeSwitches\(process\.argv, overrides, \{ packaged: app\.isPackaged \}\)/[]/'; }
-m_argv_second_gone() { asar_edit "$1" src/main.js 's/unsafeSwitches\(argv, overrides, \{ secondInstance: true, packaged: app\.isPackaged \}\)/[]/'; }
-m_headless_env_honoured() { asar_edit "$1" src/main.js 's/unsafeSwitches\(process\.argv, overrides, \{ packaged: app\.isPackaged \}\)/unsafeSwitches(process.argv, {BENTO_TEST_HEADLESS: "1"})/'; }
+m_argv_policy_gone() { asar_edit "$1" src/main.js 's/unsafeSwitches\(process\.argv, process\.env, policyOptions\)/[]/'; }
+m_argv_second_gone() { asar_edit "$1" src/main.js 's/unsafeSwitches\(argv, process\.env, \{ \.\.\.policyOptions, secondInstance: true \}\)/[]/'; }
+m_headless_env_honoured() { asar_edit "$1" src/main.js 's/unsafeSwitches\(process\.argv, process\.env, policyOptions\)/unsafeSwitches(process.argv, {BENTO_TEST_HEADLESS: "1"})/'; }
 m_no_magic() { asar_edit "$1" src/open-file.js 's/%PDF-/%XXX-/g'; }
 m_asar_no_sandbox_flag() { asar_edit "$1" src/main.js '1a const x = "--no-sandbox";'; }
 m_rm_asar() { rm "$(resdir "$1")/app.asar"; }
@@ -233,6 +237,10 @@ for k in $KINDS; do
   attempt "About text drops the source URL" $k m_about_no_source
   attempt "About text drops the AGPL notice" $k m_about_no_agpl
   attempt "BENTO_* env override honoured when packaged" $k m_env_override
+  attempt "test-mode marker in resources/" $k m_test_marker
+  attempt "test-mode marker at the tree root" $k m_test_marker_root
+  attempt "test-mode marker as a symlink in the app dir" $k m_test_marker_symlink
+  attempt "main.js stops gating test mode on the marker" $k m_marker_gate_gone
   attempt "process.env read outside the guard" $k m_env_elsewhere
   attempt "argv policy not applied to own argv" $k m_argv_policy_gone
   attempt "argv policy not applied to second-instance argv" $k m_argv_second_gone
