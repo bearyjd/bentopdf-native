@@ -172,7 +172,10 @@ Environment: `src/main.js` begins by exiting with code 2 if `ELECTRON_DISABLE_SA
 `CHROME_DEVEL_SANDBOX` is set (the sandbox is already off by then, but no window or renderer is
 created). `AppRun` and the Flatpak launcher additionally
 `unset ELECTRON_DISABLE_SANDBOX CHROME_DEVEL_SANDBOX ELECTRON_EXTRA_LAUNCH_ARGS ELECTRON_ENABLE_LOGGING ELECTRON_RUN_AS_NODE NODE_OPTIONS`;
-the gate requires every one of them in that line. deb/rpm entries start the binary directly; there
+the gate requires every one of them in that line. Consequence: through `AppRun` or the Flatpak launcher the
+sandbox variables never reach the app (the launch proceeds, sandboxed, with them removed); the
+`main.js` refusal (exit 2) only fires when the binary is started directly, e.g.
+`squashfs-root/bentopdf-native` or a deb/rpm entry. Verified separately for both paths. deb/rpm entries start the binary directly; there
 the fuses cover RUN_AS_NODE and NODE_OPTIONS and the `main.js` refusal covers the sandbox variables;
 `ELECTRON_EXTRA_LAUNCH_ARGS` and `ELECTRON_ENABLE_LOGGING` are the user's own environment (NOT
 mitigated for deb/rpm). Windows are created with `sandbox: true` (asserted in
