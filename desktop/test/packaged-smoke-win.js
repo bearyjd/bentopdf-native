@@ -131,19 +131,19 @@ async function secondInstance(cdp) {
   // The registered open command passes exactly one "%1", so each argument kind is its own launch.
   const space = await launchSecond([pdfB], 'backslash path with space and non-ASCII');
   check('second instance (path with space + non-ASCII) exits cleanly', space.code === 0, `exit=${space.code}`);
-  check('second-instance event for it arrived in the first instance (positive evidence)', /second-instance argv=.*second \u00fc\.pdf/.test(space.events), 'no event in the test event log');
+  check('second-instance event for it arrived in the first instance (positive evidence)', /second-instance argv=.*second \u00fc\.pdf/.test(space.events), /second-instance argv=.*second \u00fc\.pdf/.test(space.events) ? '' : 'no event in the test event log');
   check('second instance: backslash path with space and non-ASCII reached the first instance (grant)', await until(() => cdp.js('window.__opened.includes("second \\u00fc.pdf")'), 20000, 'forwarded file').catch(() => false));
 
   const url = await launchSecond([pathToFileURL(pdfC).href], 'file:///C:/... URL');
   check('second instance (file URL) exits cleanly', url.code === 0, `exit=${url.code}`);
-  check('second-instance event for the file URL arrived (positive evidence)', /second-instance argv=.*third\.pdf/.test(url.events), 'no event in the test event log');
+  check('second-instance event for the file URL arrived (positive evidence)', /second-instance argv=.*third\.pdf/.test(url.events), /second-instance argv=.*third\.pdf/.test(url.events) ? '' : 'no event in the test event log');
   check('second instance: file:///C:/... URL reached the first instance (grant)', await until(() => cdp.js('window.__opened.includes("third.pdf")'), 20000, 'forwarded URL').catch(() => false));
 
   // UNC and the policy checks are only meaningful when the event provably arrived and was processed:
   // "nothing was granted" must never be mistaken for "refused".
   const unc = await launchSecond([UNC], 'UNC path');
   const delivered = /second-instance argv=.*unc-refused\.pdf/.test(unc.events);
-  check('second-instance event for the UNC path arrived (positive evidence)', delivered, 'no event in the test event log');
+  check('second-instance event for the UNC path arrived (positive evidence)', delivered, delivered ? '' : 'no event in the test event log');
   check('second instance: UNC path was refused (no grant)', delivered && !unc.events.includes('granted unc-refused.pdf') && !(await cdp.js('window.__opened.includes("unc-refused.pdf")')), delivered ? '' : 'nothing delivered, refusal not proven');
   const all = [space, url, unc].map((r) => r.events).join('');
   check('second instance: argv was not rejected by the switch policy (shows what Windows injects)', delivered && !/ignored second launch/.test(all), delivered ? (all.match(/ignored second launch.*/) || [''])[0] : 'nothing delivered, policy not exercised');

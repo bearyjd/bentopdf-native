@@ -12,7 +12,8 @@ See "What was and was not verified" at the end. In short: the Windows build conf
 exercised on Linux up to the unpacked app (a real `win-unpacked` tree with fuses flipped; the NSIS
 step needs Wine and cannot run here); the installer, uninstaller, registry, shortcuts and sandbox
 were exercised by the GitHub Actions workflow `desktop-windows.yml` on `windows-latest`. **The last run
-(40805536068) is red**: everything below passed except the second-instance forwarding check.
+(40813630518) is red** only because the PORTABLE exe's second-instance forwarding does not work (installed app: 21/21
+smoke checks passed). See "What was and was not verified".
 
 ## Prerequisites (build)
 
@@ -177,46 +178,54 @@ dialog and `SOURCE.txt`, as on Linux.
 ## What was and was not verified
 
 Evidence = GitHub Actions runs of `desktop-windows.yml` on `windows-latest` (a standard runner, headless, Windows
-Server image), from the branch `feat/m5-windows-packaging`, 2026-10-29. Four runs were used: 40799612108 (a unit-test
-fixture used the wrong realpath; build skipped), 40801299255 (build ok; gate and smoke scripts had path bugs, e.g.
-`sha256sum` printing a `\` before the digest for Windows paths), 40802920084 (app smoke ran), 40805536068 (final).
+Server image), from the branch `feat/m5-windows-packaging`, 2026-10-29. Runs: 40805536068 (second-instance checks failed,
+vacuous refusal checks), 40808241772 (test-mode tracing added, unit tests made blocking and exposed Windows-incorrect test
+fixtures), 40811392955 (probes: single-argument launches work on the installed app), **40813630518 (final)**. The
+temporary `push:` trigger used for these runs was removed again; the workflow runs on `workflow_dispatch`, `main` and tags.
 
-**Proven by run 40805536068 on a real Windows runner**
-- The NSIS installer and the portable exe build with electron-builder 26.18.0 and Electron 45.1.0 (unsigned).
-- `verify-artifact-win.sh` passes on both real artifacts (opened with 7-Zip, two levels) and on `win-unpacked`:
-  licences, SOURCE.txt (Windows variant, commit, upstream, Electron hashes), fuses on the real exe, asar/bundle layout,
-  forbidden flags, no signing material.
-- `test-verify-artifact-win.sh`: positive control passes on the real installer and portable exe, every mutation is
-  caught (the symlink mutation is skipped where the shell cannot create symlinks).
-- Silent per-user install to a temp dir: executable, uninstaller, HKCU uninstall entry, desktop and Start-menu
-  shortcuts (targets are the installed exe, arguments contain no sandbox/devtools switch, read with `WScript.Shell`);
-  `OpenWithProgids` value and ProgID `shell\open\command` registered; the `.pdf` default value was not set.
-- Silent uninstall removes the executable, install directory contents, uninstall entry, both shortcuts, the ProgID
-  key and the `OpenWithProgids` value.
-- Headless packaged smoke (installed app and portable exe): window loads `bento://app`, `crossOriginIsolated` true,
-  no external resource requests, no Node globals in the page, `BENTO_DIST`/`BENTO_TRANSPORT` ignored, the launch
-  argument PDF arrives through the grant bridge and is readable via its token, the renderer (`Tab`) process reported
-  by `app.getAppMetrics()` as `sandboxed: true` at `untrusted` integrity (GPU `low`; the browser and a utility process are
-  `sandboxed: false`, `high`, as expected), a launch with `/no-sandbox` exits 2.
-- The Windows-relevant unit tests (`windows.test.js`, `brand.test.js`, `headers.test.js`) and lint pass on Windows;
-  the POSIX-oriented tests were run informationally and passed too.
+**Proven by run 40813630518 on a real Windows runner**
+- Everything listed for 40805536068 still passes: installer/portable build, 7-Zip extraction gate, gate mutation test,
+  silent install and uninstall (files, HKCU uninstall entry, shortcuts, ProgID, `OpenWithProgids`, `.pdf` default untouched),
+  window loads `bento://app`, `crossOriginIsolated`, no external requests, no Node globals, `BENTO_*` ignored, the
+  launch-argument PDF arrives through the grant bridge, renderer sandboxed at `untrusted` integrity, `/no-sandbox` exits 2.
+- **Installed app, second instance (single-argument launches, which is what the registered `"%1"` command produces):**
+  each launch exits 0 after `lock denied`, and each one provably reached the first instance (a `second-instance` event is
+  in the event log, required by the harness as positive evidence): a backslash path with a space and a non-ASCII letter is
+  granted, a `file:///C:/...` URL is granted, a UNC path `\\127.0.0.1\c$\...` is delivered and NOT granted (refused), and
+  the argv Windows delivers (it contains `--allow-file-access-from-files` injected by Electron, nothing else) is not
+  rejected by the switch policy. 21/21 checks of the installed smoke passed.
+- Unit tests that run on Windows (`open-file`, `argv-policy`, `ipc`, `security`, `static-files`, `transport-http`,
+  `normalise-modes` plus `windows`, `brand`, `headers`) pass: 50 pass, 0 fail, 3 skipped (stated POSIX-only reasons: named
+  pipes/`/dev/zero`, a FIFO in `validateOpenPath`, unix permission bits in `normaliseModes`). The step is blocking.
 
 **Failing / not proven**
-- **Second-instance forwarding on Windows is NOT working in the smoke test.** A second launch with the same
-  `--user-data-dir` and a backslash path, a `file:///C:/...` URL and a UNC path exits with code 4294967295 (installed app)
-  and never reaches the first instance: the first instance's test event log shows no `second-instance` event, and the
-  second process wrote no `lock denied` event, so it seems to terminate before `main.js` reaches the single-instance
-  lock. The cause is unknown (not investigated further: the four allowed CI iterations were used). Linux forwards
-  correctly. Until fixed, "Open with" on a running window is NOT VERIFIED on Windows; opening a PDF by launching the app with it
-  is proven. The UNC refusal is only proven at the unit level (the UNC case "passing" in the smoke is vacuous while
-  forwarding is broken).
-- `/switch` handling is from the Chromium source plus unit tests and the `/no-sandbox` exit-2 probe: whether Chromium itself
-  honours `/remote-debugging-port=...` was not measured.
+- **Portable exe: second-instance forwarding does NOT work (FAIL in the smoke).** A second `portable.exe` launch never exits
+  within 30 s and never reaches `main.js`. Process listing while stuck: the first stub has the running app as a child from
+  its extraction directory under `%TEMP%`; the second stub is running and has no child. So the second stub itself hangs
+  before starting an app, probably while extracting into/over the locked directory or waiting on something (cause NOT
+  determined; hidden modal dialog not verified). Opening a PDF by launching the portable exe once is proven. A user
+  double-clicking a PDF with the portable build while it is running would not be forwarded. Possible next probes: the
+  electron-builder `portable` `unpackDirName` / `requestExecutionLevel` options and the stub's behaviour.
+- **Multi-argument launches can crash the installed app before JavaScript runs:** `[file URL, UNC path]` and
+  `[path with space, file URL, UNC path]` exit with code 4294967295, no trace file and no Chromium log (measured, reproducible
+  in this run and the previous ones); `[space, URL]` and `[space, UNC]` are fine, and every single argument is fine. Cause
+  NOT determined (happens before `main.js`; not our argument policy). Not produced by Explorer's open command (one `"%1"`),
+  reported by the smoke as `INFO multi-argument` lines, not as checks.
+- Argument policy: **measured** on Windows: `/no-sandbox` as the first instance's argument is refused with exit 2 by our
+  code. **Read from Chromium source, NOT measured**: that Chromium itself would honour `/switch` and lowercases names. A
+  POSIX-looking `/d/a.pdf` is therefore dropped (whole launch ignored in a second instance) on win32; real Windows file
+  arguments (`C:\x.pdf`, `\\server\share\x.pdf`, `file:///C:/x.pdf`) never start with a slash. This is why the unit test
+  that failed on Windows was wrong, not the policy: it now passes the platform explicitly (`linux` or `win32`).
 - Code signing, SmartScreen behaviour, an all-users (per-machine) install, upgrade-over-existing install, a visible
   window, real Explorer double-click / "Open with" / default-app selection, Windows Firewall behaviour, Windows ARM
   and older Windows versions: NOT VERIFIED (never run).
 - NTFS specifics (8.3 names, streams, mapped drives, 64-bit file index precision in `dev`/`ino`) are covered by lexical unit
-  tests only.
+  tests only. On Windows a symlink swapped in after a grant is refused by the dev/ino identity check, not by `ELOOP`.
 - Licences of what the Windows packages add (NSIS, its plugins, Microsoft DLLs inside Electron) were not reviewed; see NOTICE.
 - The existing Linux `packaging/test-verify-artifact.sh` fails its positive control on this dev host ("missing or empty:
   resources/LICENSE" on the AppImage tree) both with and without these changes; not investigated.
+
+**Earlier false root-cause hypotheses (ruled out by evidence):** wrong `--user-data-dir` (same dir was used and worked),
+handler registered late (single-argument launches arrive), early abort in our policy (traces show it passes). The first
+failing runs launched a three-argument command that crashes in the multi-argument case above, so "nothing delivered" had been
+misread as a lock problem; two smoke checks that reported ok were vacuous and now require positive evidence.

@@ -150,14 +150,14 @@ only or partly, `[ ]` means not shown. Ticks are updated from the last run, not 
 - [x] NSIS installer (per-user, not one-click, choosable folder, desktop and Start-menu shortcuts), portable exe: built, installed
   silently, run, uninstalled on `windows-latest` (run 40805536068). Installer and portable exe both pass the Windows gate by 7-Zip extraction.
 - [~] `.pdf` registered under `OpenWithProgids` only (no default takeover), removed on uninstall: proven in that run.
-  Launch-with-a-PDF through the grant bridge: proven. **Second-instance forwarding failed in the Windows smoke (cause unknown): open.**
+  Launch-with-a-PDF through the grant bridge: proven. **Second-instance forwarding: proven on the installed app for single-argument launches (run 40813630518); the portable exe's second launch hangs before starting an app (open); multi-argument launches `[file URL, UNC]` crash before `main.js` (open, not produced by Explorer).**
   UNC refusal, drive letters, `file:///C:/`, long paths: unit tests only.
 - [x] Sandbox on Windows: renderer `sandboxed: true`, `untrusted` integrity (Electron `getAppMetrics`), `/no-sandbox` refused; `crossOriginIsolated`, no external requests,
   `BENTO_*` ignored when packaged.
 - [~] Same hardening as Linux: fuses via the shared `afterPack` (checked on the real exe in CI), WASM outside the asar, `/switch` treated as a switch on win32
   (from the Chromium source, not measured), Windows path rules for static files (lexical unit tests; real NTFS not tested).
 - [x] Windows release gate (`verify-artifact-win.sh`) and its mutation test (39 mutations caught; passes on the real installer and portable exe in CI).
-- [~] CI workflow `desktop-windows.yml`: ran four times; the last run is red only because of the second-instance check above.
+- [~] CI workflow `desktop-windows.yml`: last run 40813630518 is red only because of the portable second-instance check above.
 - [ ] Code signing: optional via secrets, never exercised. Unsigned builds trigger SmartScreen.
 - [ ] A release: `NOTICE` has unresolved lines (now including NSIS and Windows Electron DLLs), so tag builds fail by design.
 - [ ] A visible window on Windows (only the hidden test mode was ever run), real Explorer double-click, all-users install, upgrade install.
