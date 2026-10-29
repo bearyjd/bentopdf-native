@@ -131,17 +131,20 @@ test('grantBytes: in-memory PDFs only, read back without touching disk', async (
   assert.throws(() => h.dispose.grantBytes(h.sender, 'a.pdf', 'string'), /not a PDF/);
 });
 
-test('dialog-selected paths go through the shared validator: network paths, directories and FIFOs are refused', async () => {
+test('dialog-selected paths go through the shared validator: network paths and directories are refused', async () => {
   for (const p of ['\\\\host\\share\\a.pdf', '//host/share/a.pdf', '\\\\.\\pipe\\x', '\\\\?\\UNC\\h\\s\\a.pdf', 'smb://h/s/a.pdf']) {
     const h = harness({ dialogs: picking([p]) });
     await assert.rejects(h.call(CHANNELS.openFile, {}), /network paths are not allowed/, p);
   }
-  const fifo = path.join(tmp, 'dialog-pipe');
-  execFileSync('mkfifo', [fifo]);
-  await assert.rejects(harness({ dialogs: picking([fifo]) }).call(CHANNELS.openFile, {}), /not a regular file/);
   await assert.rejects(harness({ dialogs: picking([tmp]) }).call(CHANNELS.openFile, {}), /not a regular file/);
   await assert.rejects(harness({ dialogs: picking(['relative.txt']) }).call(CHANNELS.openFile, {}));
   await assert.rejects(harness({ dialogs: picking(['/x\0y']) }).call(CHANNELS.openFile, {}), /not a usable path/);
+});
+
+test('dialog-selected FIFO is refused', { skip: process.platform === 'win32' && 'POSIX-only: named pipes (mkfifo) do not exist on Windows' }, async () => {
+  const fifo = path.join(tmp, 'dialog-pipe');
+  execFileSync('mkfifo', [fifo]);
+  await assert.rejects(harness({ dialogs: picking([fifo]) }).call(CHANNELS.openFile, {}), /not a regular file/);
 });
 
 test('a dialog pick of a symlink is granted by the picked name but reads the resolved regular file', async () => {

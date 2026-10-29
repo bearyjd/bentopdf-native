@@ -111,7 +111,8 @@ test('recents: capped, deduplicated, persisted, ids map back to paths, no path i
   assert.equal(recents.pathOf(listed[0].id), '/docs/5.pdf');
   assert.equal(recents.pathOf('__proto__'), undefined);
   assert.equal(recents.pathOf({}), undefined);
-  assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600');
+  // POSIX mode bits only: on Windows the file's protection is the profile directory's ACL (chmod maps to a read-only flag).
+  if (process.platform !== 'win32') assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600');
   const reloaded = createRecents({ file });
   assert.deepEqual(reloaded.list().map((r) => r.name), listed.map((r) => r.name));
   assert.equal(reloaded.remove(reloaded.list()[0].id), true);

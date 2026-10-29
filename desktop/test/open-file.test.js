@@ -206,5 +206,6 @@ test('network paths (UNC, //host) are refused on every platform: validateOpenPat
   for (const p of ['/home/u/a.pdf', 'C:\\docs\\a.pdf', 'a.pdf', '', null, '\\\\?\\C:\\docs\\a.pdf', '//?/c:/docs/a.pdf', 'file:///home/u/a.pdf', 'file://localhost/home/u/a.pdf']) {
     assert.equal(hasNetworkPrefix(p), false, `legitimate: ${String(p)}`);
   }
-  assert.deepEqual(pdfPathsFromArgv(['app', '//host/share/a.pdf', '\\\\host\\s\\b.pdf', '\\\\.\\pipe\\x.pdf', 'file://host/share/d.pdf', '/ok/c.pdf'], { cwd: '/' }), ['/ok/c.pdf']);
+  assert.deepEqual(pdfPathsFromArgv(['app', '//host/share/a.pdf', '\\\\host\\s\\b.pdf', '\\\\.\\pipe\\x.pdf', 'file://host/share/d.pdf', '/ok/c.pdf'], { cwd: '/', ...posix }), ['/ok/c.pdf']);
+  assert.deepEqual(pdfPathsFromArgv(['app', '\\\\host\\s\\b.pdf', '\\\\.\\pipe\\x.pdf', 'file://host/share/d.pdf', 'C:\\ok\\c.pdf'], { cwd: 'C:\\', platform: 'win32' }), ['C:\\ok\\c.pdf']);
 });
