@@ -72,14 +72,23 @@ function logProcessSandbox() {
   const processes = app.getAppMetrics().map(({ type, sandboxed, integrityLevel }) => ({ type, sandboxed, integrityLevel }));
   const json = JSON.stringify(processes);
   process.stderr.write(`[bento-test] process-sandbox ${json}\n`);
-  fs.writeFileSync(path.join(app.getPath('userData'), 'bento-test-sandbox.json'), json);
+  try {
+    fs.writeFileSync(path.join(app.getPath('userData'), 'bento-test-sandbox.json'), json);
+  } catch (err) {
+    process.stderr.write(`[bento-test] sandbox report not written: ${err.message}\n`);
+  }
 }
 
 // Test mode only: append-and-flush events next to the profile. stderr from a process that exits right
 // after writing can be lost on Windows pipes, and the second-instance smoke needs both sides' events.
 function testLog(message) {
   if (!testMode) return;
-  fs.appendFileSync(path.join(app.getPath('userData'), 'bento-test-events.log'), `${process.pid} ${message}\n`);
+  // Never throws: it is called from promise handlers, where a throw would be an unhandled rejection.
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'bento-test-events.log'), `${process.pid} ${message}\n`);
+  } catch (err) {
+    process.stderr.write(`[bento-test] event log failed: ${err.message}\n`);
+  }
 }
 
 // Test mode only, and only when the harness names a directory: one trace file per process, flushed on
@@ -92,6 +101,10 @@ function trace(message) {
   } catch (err) {
     process.stderr.write(`[bento-test] trace failed: ${err.message}\n`);
   }
+}
+function acquireSingleInstanceLock() {
+  trace('requesting single-instance lock');
+  return app.requestSingleInstanceLock();
 }
 trace(`start pid=${process.pid} ppid=${process.ppid} exec=${process.execPath} argv=${JSON.stringify(process.argv)} userData=${app.getPath('userData')}`);
 process.on('exit', (code) => trace(`process exit code=${code}`));
@@ -120,7 +133,7 @@ if (refused.length > 0) {
 } else if (!TRANSPORTS.includes(transport)) {
   process.stderr.write(`BENTO_TRANSPORT must be one of ${TRANSPORTS.join(', ')}\n`);
   app.exit(2);
-} else if (!(trace('requesting single-instance lock'), app.requestSingleInstanceLock())) {
+} else if (!acquireSingleInstanceLock()) {
   trace('lock DENIED (this is the second instance)');
   log('another instance is already running; exiting');
   testLog('lock denied: this is the second instance, exiting');
