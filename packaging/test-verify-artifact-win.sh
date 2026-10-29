@@ -114,12 +114,23 @@ m_no_bundle_source() { rm "$1/resources/dist/SOURCE.txt"; }
 m_override_honoured() { edit_asar "$1" 's/app.isPackaged ? {} : process.env/process.env \/\/ MUTATED/' src/main.js; }
 m_sandbox_env_not_refused() { edit_asar "$1" "s/'CHROME_DEVEL_SANDBOX'/'CHROME_DEVEL_SANDBOX_MUTATED'/" src/main.js; }
 m_no_sandbox_in_code() { edit_asar "$1" 's/^.use strict.;/"use strict"; \/\/ MUTATED --no-sandbox/' src/menu.js; }
-m_window_always_shown() { edit_asar "$1" 's/show: !testHeadless()/show: true \/\/ MUTATED/' src/main.js; }
+m_window_always_shown() { edit_asar "$1" 's/const show = !testMode;/const show = true; \/\/ MUTATED/' src/main.js; }
+m_test_env_unmarked() { edit_asar "$1" 's/ \&\& (!policyOptions.packaged || policyOptions.testMarker === true) ? process.env : null;/ ? process.env : null; \/\/ MUTATED/' src/main.js; }
+m_marker_check_off() { edit_asar "$1" 's/testMarker: app.isPackaged \&\& hasTestMarker(process.resourcesPath)/testMarker: true \/\/ MUTATED/' src/main.js; }
+m_win_marker_always() { edit_asar "$1" "s/if (platform === 'win32') return hasTestMarkerWin32(resourcesPath, fsImpl);/if (platform === 'win32') return true; \/\/ MUTATED/" src/test-mode.js; }
+m_win_no_lstat_link() { edit_asar "$1" 's/lst.isSymbolicLink() || !lst.isFile()/!lst.isFile() \/\/ MUTATED/' src/test-mode.js; }
+m_win_no_res_realpath() { edit_asar "$1" 's/if (!sameWin32Path(res, P.resolve(resourcesPath))) return false;/\/\/ MUTATED/' src/test-mode.js; }
+m_win_no_marker_realpath() { edit_asar "$1" 's/if (!sameWin32Path(fsImpl.realpathSync.native(marker), marker)) return false;/\/\/ MUTATED/' src/test-mode.js; }
+m_win_no_devino() { edit_asar "$1" 's/ || st.dev !== lst.dev || st.ino !== lst.ino) return false;/) return false; \/\/ MUTATED/' src/test-mode.js; }
+m_win_no_nlink() { edit_asar "$1" 's/if (st.nlink !== 1 || st.size !== MARKER_CONTENT.length) return false;/\/\/ MUTATED/' src/test-mode.js; }
+m_env_elsewhere() { edit_asar "$1" '1a const leak = process.env.HOME; // MUTATED' src/app.js; }
+m_marker_in_resources() { printf 'bento-test-mode-v1\n' > "$1/resources/.bento-test-mode"; }
+m_marker_upper_root() { printf 'bento-test-mode-v1\n' > "$1/.BENTO-TEST-MODE"; }
 m_no_slash_switch_rule() { edit_asar "$1" "s/platform === 'win32' \&\& arg.startsWith('\/')/false \/\/ MUTATED/" src/argv-policy.js; }
 m_no_windows_path_rules() { edit_asar "$1" 's/windowsPathProblem/wpp_MUTATED/g' src/open-file.js; }
 m_no_static_rules() { edit_asar "$1" 's/isWindowsUnsafeSegment/iwus_MUTATED/g' src/static-files.js; }
 m_js_realpath() { edit_asar "$1" 's/realpathSync.native/realpathSync \/\/ MUTATED/' src/app.js; }
-m_second_instance_unchecked() { edit_asar "$1" 's/unsafeSwitches(argv, undefined, { secondInstance: true })/[] \/\/ MUTATED/' src/main.js; }
+m_second_instance_unchecked() { edit_asar "$1" 's/unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true })/[] \/\/ MUTATED/' src/main.js; }
 m_no_sandbox_lnk() { printf -- '--no-sandbox' | iconv -f utf-8 -t utf-16le > "$1/shortcut.lnk"; }
 m_no_sandbox_bat() { echo '"%~dp0app.exe" --no-sandbox' > "$1/launch.bat"; }
 m_inspect_ps1() { echo 'Start-Process app.exe -ArgumentList "--remote-debugging-port=9222"' > "$1/start.ps1"; }
@@ -153,6 +164,17 @@ attempt "BENTO_* override honoured when packaged" m_override_honoured
 attempt "sandbox-off env no longer refused" m_sandbox_env_not_refused
 attempt "--no-sandbox inside app.asar" m_no_sandbox_in_code
 attempt "window always shown (no test mode)" m_window_always_shown
+attempt "test-only behaviour on env alone (no marker)" m_test_env_unmarked
+attempt "marker result ignored (testMarker: true)" m_marker_check_off
+attempt "win32 marker check always true" m_win_marker_always
+attempt "win32 marker: symlink/junction not refused" m_win_no_lstat_link
+attempt "win32 marker: resources realpath unchecked" m_win_no_res_realpath
+attempt "win32 marker: reparse redirect unchecked" m_win_no_marker_realpath
+attempt "win32 marker: lstat/fstat swap unchecked" m_win_no_devino
+attempt "win32 marker: nlink/size unchecked" m_win_no_nlink
+attempt "process.env read outside the guard" m_env_elsewhere
+attempt "test-mode marker in resources/" m_marker_in_resources
+attempt "test-mode marker at the root, other case" m_marker_upper_root
 attempt "/switch no longer a switch on win32" m_no_slash_switch_rule
 attempt "Windows open-with path rules removed" m_no_windows_path_rules
 attempt "Windows static path rules removed" m_no_static_rules

@@ -140,21 +140,39 @@ pass "offline bundle is an extraResource outside app.asar; app.asar is $ASAR_SIZ
 ASAR_JS="$ROOT/desktop/node_modules/@electron/asar/bin/asar.js"
 [ -f "$ASAR_JS" ] || fail "asar tool missing (run npm ci in desktop/)"
 node "$(native "$ASAR_JS")" extract "$(native "$ASAR_PATH")" "$(native "$WORK/asar")" || fail "asar extract failed"
-for f in src/main.js src/menu.js src/argv-policy.js src/open-file.js src/static-files.js src/app.js brand.json; do
+for f in src/main.js src/menu.js src/argv-policy.js src/test-mode.js src/open-file.js src/static-files.js src/app.js brand.json; do
   [ -s "$WORK/asar/$f" ] || fail "app.asar lacks $f"
 done
 M="$WORK/asar/src/main.js"
+T="$WORK/asar/src/test-mode.js"
 grep -q 'app.isPackaged ? {} : process.env' "$M" || fail "main.js does not gate BENTO_* overrides on app.isPackaged"
-if grep -rn 'process\.env' "$WORK/asar/src" | grep -Ev 'src/main.js:.*(overrides = app.isPackaged|process\.env\[name\])|src/argv-policy.js:.*env = process\.env'; then
-  fail "process.env is read somewhere other than the guarded overrides line, the sandbox-env refusal and the argv policy defaults"
-fi
-pass "BENTO_* overrides are read only through the app.isPackaged guard"
+# process.env: parsed, not grepped (same helper and exempt lines as the Linux gate). It also RUNS the packaged marker
+# logic and argv policy: on windows-latest the win32 branch against real NTFS files, on every host against a fake fs.
+node "$(native "$ROOT/desktop/tools/check-asar-policy.js")" "$(native "$WORK/asar")" || fail "process.env is read outside the known guarded lines, or the packaged marker logic / argv policy misbehaves"
+pass "BENTO_* overrides are read only through the app.isPackaged guard; packaged marker logic and argv policy behave as designed"
 
 grep -q "'ELECTRON_DISABLE_SANDBOX'" "$M" && grep -q "'CHROME_DEVEL_SANDBOX'" "$M" || fail "main.js does not refuse to start when ELECTRON_DISABLE_SANDBOX / CHROME_DEVEL_SANDBOX is set"
 grep -q 'app.exit(2)' "$M" || fail "main.js has no exit-2 refusal"
-grep -q 'unsafeSwitches(process.argv)' "$M" || fail "main.js does not check its own argv"
-grep -q "unsafeSwitches(argv, undefined, { secondInstance: true })" "$M" || fail "main.js does not check second-instance argv"
-grep -q 'show: !testHeadless()' "$M" || fail "main.js does not hide the window in test mode (show: !testHeadless())"
+grep -qF 'unsafeSwitches(process.argv, process.env, policyOptions)' "$M" || fail "main.js does not check its own argv"
+grep -qF 'unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true })' "$M" || fail "main.js does not check second-instance argv"
+grep -qF 'packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath)' "$M" || fail "main.js does not gate packaged test mode on the marker file"
+grep -qF '(!policyOptions.packaged || policyOptions.testMarker === true) ? process.env : null' "$M" || fail "main.js test-only behaviour is not gated on the marker"
+grep -qF 'const show = !testMode;' "$M" || fail "main.js does not hide the window in test mode (const show = !testMode;)"
+grep -qF "(!packaged || testMarker === true)" "$WORK/asar/src/argv-policy.js" || fail "argv-policy.js does not require testMarker === true for a packaged build"
+# The win32 marker controls as text (the helper above also runs them): removing one must fail here too.
+for needle in "if (platform === 'win32') return hasTestMarkerWin32(resourcesPath, fsImpl);" \
+  'fsImpl.realpathSync.native(resourcesPath)' 'sameWin32Path(res, P.resolve(resourcesPath))' 'const marker = P.join(res, MARKER_NAME);' \
+  'lst.isSymbolicLink() || !lst.isFile()' 'sameWin32Path(fsImpl.realpathSync.native(marker), marker)' \
+  'st.dev !== lst.dev || st.ino !== lst.ino' 'st.nlink !== 1 || st.size !== MARKER_CONTENT.length' "=== MARKER_CONTENT;"; do
+  grep -qF -- "$needle" "$T" || fail "test-mode.js lost the win32 marker control: $needle"
+done
+grep -qF "const MARKER_CONTENT = 'bento-test-mode-v1\\n';" "$T" || fail "test-mode.js marker token changed"
+pass "test mode needs env AND marker; win32 marker controls (native realpath, lstat not-a-link, reparse check, dev/ino, nlink, size, token) present; window hidden only in test mode"
+grep -q "platform === 'win32' && arg.startsWith('/')" "$WORK/asar/src/argv-policy.js" || fail "argv-policy.js does not treat /switch as a switch on win32"
+grep -q 'windowsPathProblem' "$WORK/asar/src/open-file.js" || fail "open-file.js lacks the Windows path rules (UNC, streams, device names)"
+grep -q 'isWindowsUnsafeSegment' "$WORK/asar/src/static-files.js" || fail "static-files.js lacks the Windows path-segment rules"
+grep -q 'realpathSync.native' "$WORK/asar/src/app.js" || fail "app.js does not canonicalise the bundle root with realpathSync.native"
+pass "argv policy (own and second-instance, incl. /switch), Windows path rules and native realpath are present"
 grep -q '%PDF-' "$WORK/asar/src/open-file.js" || fail "open-file.js does not check the %PDF- header"
 grep -q 'realpath' "$WORK/asar/src/open-file.js" || fail "open-file.js does not resolve symlinks"
 grep -q 'windowsPathProblem' "$WORK/asar/src/open-file.js" || fail "open-file.js lacks the Windows path rules (UNC, streams, device names)"
@@ -199,6 +217,10 @@ grep -q 'DeleteRegKey SHELL_CONTEXT "Software\\Classes\\${APP_ID}.pdf"' "$NSH" |
 pass "installer.nsh registers .pdf only under OpenWithProgids and the uninstaller removes both keys"
 
 # ---- payload hygiene -------------------------------------------------------------------
+# The test-mode marker must never ship: not in the payload, not in the outer installer archive (any case: NTFS).
+MARKERS="$(find "$OUT" "$OUTER" -iname .bento-test-mode -print 2>/dev/null | head -3)"
+[ -z "$MARKERS" ] || { printf '%s\n' "$MARKERS" >&2; fail "the test-mode marker .bento-test-mode is present in the artifact"; }
+pass "no .bento-test-mode marker anywhere in the artifact"
 BAD="$(find "$OUT" \( -iname '*.pdb' -o -iname '*.pfx' -o -iname '*.p12' -o -iname '*.pem' -o -iname '*.key' -o -iname '*.snk' -o -iname '*.jks' -o -iname '*.keystore' -o -iname '*.p8' -o -iname '.env' -o -iname '.env.*' -o -iname '.npmrc' -o -iname 'id_rsa*' \) -print | head -5)"
 [ -z "$BAD" ] || { echo "$BAD" >&2; fail "forbidden file (debug symbols or signing/secret material) in the payload"; }
 LINKS="$(find "$OUT" -type l -print | head -5)"

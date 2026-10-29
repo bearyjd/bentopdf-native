@@ -5,7 +5,9 @@
 //   1. process.env is read only on five exact, known lines (found by parsing, so comments never count and a read
 //      appended to a known line is a different line text and fails).
 //   2. The packaged src/test-mode.js and src/argv-policy.js BEHAVE as designed: run, not grepped. A marker
-//      function that returns true, or an argv policy that ignores the marker, fails here.
+//      function that returns true, or an argv policy that ignores the marker, fails here. Real files exercise the
+//      host's own branch (POSIX on Linux, win32 on windows-latest); the win32 branch also runs against a fake fs
+//      on every host.
 // Exits non-zero on the first violated rule. Needs espree (a dependency of eslint) from desktop/node_modules.
 const fs = require('node:fs');
 const os = require('node:os');
@@ -69,22 +71,60 @@ try {
   const write = (content = MARKER_CONTENT, mode = 0o644) => { fs.rmSync(marker, { recursive: true, force: true }); fs.writeFileSync(marker, content); fs.chmodSync(marker, mode); };
   const expect = (name, got, want) => { if (got !== want) fail(`packaged marker logic: ${name} (got ${got}, want ${want})`); };
 
-  expect('no marker file', hasTestMarker(tmp), false);
-  write(); expect('valid marker', hasTestMarker(tmp), true);
-  expect('marker owned by another uid', hasTestMarker(tmp, { uid: process.getuid() + 1 }), false);
-  write(MARKER_CONTENT + 'x'); expect('marker with extra bytes', hasTestMarker(tmp), false);
-  write('wrong-token-of-the-same-length\n'.slice(0, MARKER_CONTENT.length)); expect('marker with another token', hasTestMarker(tmp), false);
-  write(MARKER_CONTENT.replace('v1', 'v2')); expect('marker with a same-length, same-prefix token', hasTestMarker(tmp), false);
-  write(MARKER_CONTENT, 0o664); expect('group-writable marker', hasTestMarker(tmp), false);
-  write(MARKER_CONTENT, 0o602); expect('world-writable marker', hasTestMarker(tmp), false);
-  write(); fs.linkSync(marker, path.join(tmp, 'second-name')); expect('hard-linked marker', hasTestMarker(tmp), false);
-  fs.unlinkSync(path.join(tmp, 'second-name'));
-  write(); fs.renameSync(marker, path.join(tmp, 'real')); fs.symlinkSync(path.join(tmp, 'real'), marker); expect('symlinked marker', hasTestMarker(tmp), false);
-  fs.rmSync(marker); fs.rmSync(path.join(tmp, 'real'));
-  fs.mkdirSync(marker); expect('directory as marker', hasTestMarker(tmp), false); fs.rmdirSync(marker);
-  write(); const alias = `${tmp}-alias`; fs.symlinkSync(tmp, alias); aliases.push(alias);
-  expect('resources path through a symlink', hasTestMarker(alias), false);
-  expect('resources path undefined', hasTestMarker(undefined), false);
+  if (process.platform === 'win32') {
+    // win32 host (packaging/verify-artifact-win.sh on windows-latest): the shipped win32 branch on real NTFS files.
+    const write = (content = MARKER_CONTENT) => { fs.rmSync(marker, { recursive: true, force: true }); fs.writeFileSync(marker, content); };
+    expect('no marker file', hasTestMarker(tmp), false);
+    write(); expect('valid marker', hasTestMarker(tmp), true);
+    write(MARKER_CONTENT + 'x'); expect('marker with extra bytes', hasTestMarker(tmp), false);
+    write(MARKER_CONTENT.replace('v1', 'v2')); expect('marker with a same-length, same-prefix token', hasTestMarker(tmp), false);
+    write(); fs.linkSync(marker, path.join(tmp, 'second-name')); expect('hard-linked marker', hasTestMarker(tmp), false);
+    fs.unlinkSync(path.join(tmp, 'second-name'));
+    write(); fs.renameSync(marker, path.join(tmp, 'real')); fs.symlinkSync(path.join(tmp, 'real'), marker, 'file'); expect('symlinked marker', hasTestMarker(tmp), false);
+    fs.rmSync(marker); fs.rmSync(path.join(tmp, 'real'));
+    fs.mkdirSync(marker); expect('directory as marker', hasTestMarker(tmp), false); fs.rmdirSync(marker);
+    write(); const alias = `${tmp}-junction`; fs.symlinkSync(tmp, alias, 'junction'); aliases.push(alias);
+    expect('resources path through a junction', hasTestMarker(alias), false);
+    expect('resources path undefined', hasTestMarker(undefined), false);
+  } else {
+    expect('no marker file', hasTestMarker(tmp), false);
+    write(); expect('valid marker', hasTestMarker(tmp), true);
+    expect('marker owned by another uid', hasTestMarker(tmp, { uid: process.getuid() + 1 }), false);
+    write(MARKER_CONTENT + 'x'); expect('marker with extra bytes', hasTestMarker(tmp), false);
+    write('wrong-token-of-the-same-length\n'.slice(0, MARKER_CONTENT.length)); expect('marker with another token', hasTestMarker(tmp), false);
+    write(MARKER_CONTENT.replace('v1', 'v2')); expect('marker with a same-length, same-prefix token', hasTestMarker(tmp), false);
+    write(MARKER_CONTENT, 0o664); expect('group-writable marker', hasTestMarker(tmp), false);
+    write(MARKER_CONTENT, 0o602); expect('world-writable marker', hasTestMarker(tmp), false);
+    write(); fs.linkSync(marker, path.join(tmp, 'second-name')); expect('hard-linked marker', hasTestMarker(tmp), false);
+    fs.unlinkSync(path.join(tmp, 'second-name'));
+    write(); fs.renameSync(marker, path.join(tmp, 'real')); fs.symlinkSync(path.join(tmp, 'real'), marker); expect('symlinked marker', hasTestMarker(tmp), false);
+    fs.rmSync(marker); fs.rmSync(path.join(tmp, 'real'));
+    fs.mkdirSync(marker); expect('directory as marker', hasTestMarker(tmp), false); fs.rmdirSync(marker);
+    write(); const alias = `${tmp}-alias`; fs.symlinkSync(tmp, alias); aliases.push(alias);
+    expect('resources path through a symlink', hasTestMarker(alias), false);
+    expect('resources path undefined', hasTestMarker(undefined), false);
+  }
+  // Any host: the shipped win32 branch against a fake fs (one valid case, then one bad fact at a time).
+  const winRes = 'C:\\BentoPDF\\resources';
+  const winMarker = `${winRes}\\${MARKER_NAME}`;
+  const fakeWin = ({ resReal = winRes, markerReal = winMarker, lstat = {}, fstat = {}, token = MARKER_CONTENT } = {}) => {
+    const st = { isFile: () => true, isSymbolicLink: () => false, dev: 1, ino: 2, nlink: 1, size: MARKER_CONTENT.length };
+    const realpathSync = () => { throw new Error('win32 branch must use realpathSync.native'); };
+    realpathSync.native = (q) => (q === winRes ? resReal : q === `${resReal}\\${MARKER_NAME}` ? markerReal : q);
+    return {
+      constants: { O_RDONLY: 0 }, realpathSync, closeSync: () => {}, openSync: () => 3,
+      lstatSync: () => ({ ...st, ...lstat }), fstatSync: () => ({ ...st, ...fstat }), readSync: (_fd, b) => b.write(token),
+    };
+  };
+  const win = (f) => hasTestMarker(winRes, { fsImpl: f, platform: 'win32' });
+  expect('win32 branch: valid marker (fake fs)', win(fakeWin()), true);
+  expect('win32 branch: resources through a junction (fake fs)', win(fakeWin({ resReal: 'D:\\x\\resources', markerReal: `D:\\x\\resources\\${MARKER_NAME}` })), false);
+  expect('win32 branch: symlinked marker (fake fs)', win(fakeWin({ lstat: { isSymbolicLink: () => true } })), false);
+  expect('win32 branch: marker redirected by a reparse point (fake fs)', win(fakeWin({ markerReal: 'D:\\y\\m' })), false);
+  expect('win32 branch: handle is not the lstat\'ed file (fake fs)', win(fakeWin({ fstat: { ino: 9 } })), false);
+  expect('win32 branch: hard-linked marker (fake fs)', win(fakeWin({ fstat: { nlink: 2 } })), false);
+  expect('win32 branch: wrong size (fake fs)', win(fakeWin({ fstat: { size: MARKER_CONTENT.length + 1 } })), false);
+  expect('win32 branch: another token (fake fs)', win(fakeWin({ token: MARKER_CONTENT.replace('v1', 'v2') })), false);
 
   const ENV = { BENTO_TEST_HEADLESS: '1' };
   const port = ['exe', '--remote-debugging-port=0'];
