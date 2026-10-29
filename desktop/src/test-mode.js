@@ -11,6 +11,12 @@ const path = require('node:path');
 const MARKER_NAME = '.bento-test-mode';
 const MARKER_CONTENT = 'bento-test-mode-v1\n';
 
+// Closing the descriptor must never throw out of the fail-closed path: a throw in `finally` would replace the verdict.
+function closeQuietly(fsImpl, fd) {
+  if (fd === null) return;
+  try { fsImpl.closeSync(fd); } catch { /* the verdict is already decided */ }
+}
+
 /**
  * True only for a regular file (not a symlink) owned by us, with a single hard link, not group/world-writable,
  * with exactly the token, inside a resources directory that is its own real path. Everything else fails closed.
@@ -34,7 +40,7 @@ function hasTestMarker(resourcesPath, { fsImpl = fs, uid = process.getuid && pro
   } catch {
     return false; // absent, symlink, unreadable: all mean "not test mode"
   } finally {
-    if (fd !== null) fsImpl.closeSync(fd);
+    closeQuietly(fsImpl, fd);
   }
 }
 
@@ -58,20 +64,20 @@ function hasTestMarkerWin32(resourcesPath, fsImpl) {
     const res = fsImpl.realpathSync.native(resourcesPath);
     if (!sameWin32Path(res, P.resolve(resourcesPath))) return false;
     const marker = P.join(res, MARKER_NAME);
-    const lst = fsImpl.lstatSync(marker);
+    const lst = fsImpl.lstatSync(marker, { bigint: true }); // bigint: NTFS file ids are 64 bit
     if (lst.isSymbolicLink() || !lst.isFile()) return false;
     if (!sameWin32Path(fsImpl.realpathSync.native(marker), marker)) return false;
     fd = fsImpl.openSync(marker, fsImpl.constants.O_RDONLY);
-    const st = fsImpl.fstatSync(fd);
+    const st = fsImpl.fstatSync(fd, { bigint: true });
     if (!st.isFile() || st.dev !== lst.dev || st.ino !== lst.ino) return false;
-    if (st.nlink !== 1 || st.size !== MARKER_CONTENT.length) return false;
+    if (Number(st.nlink) !== 1 || Number(st.size) !== MARKER_CONTENT.length) return false;
     const buf = Buffer.alloc(MARKER_CONTENT.length + 1);
     const n = fsImpl.readSync(fd, buf, 0, buf.length, 0);
     return buf.toString('utf8', 0, n) === MARKER_CONTENT;
   } catch {
     return false;
   } finally {
-    if (fd !== null) fsImpl.closeSync(fd);
+    closeQuietly(fsImpl, fd);
   }
 }
 

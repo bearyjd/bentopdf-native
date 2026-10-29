@@ -111,9 +111,9 @@ test('grantPath: shell handoff grant is per WebContents, validated, and identity
   const pdf = file('handoff.pdf', '%PDF-1.4\nbody');
   const entry = await h.dispose.grantPath(h.sender, pdf);
   assert.equal(Buffer.from(await h.call(CHANNELS.readFile, entry.token)).toString().slice(0, 5), '%PDF-');
-  const { ino, dev } = fs.statSync(pdf);
+  const { ino, dev } = fs.statSync(pdf, { bigint: true });
   await h.dispose.grantPath(h.sender, pdf, { ino, dev });
-  await assert.rejects(h.dispose.grantPath(h.sender, pdf, { ino: ino + 1, dev }), /changed since it was opened/);
+  await assert.rejects(h.dispose.grantPath(h.sender, pdf, { ino: ino + 1n, dev }), /changed since it was opened/);
   await assert.rejects(h.dispose.grantPath(h.sender, file('nope.pdf', 'plain text')), /not a PDF/);
   await assert.rejects(h.dispose.grantPath(h.sender, file('x.txt', '%PDF-')), /not a .pdf/);
   const other = Object.assign(new EventEmitter(), { id: 2 });

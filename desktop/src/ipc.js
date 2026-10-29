@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { CHANNELS } = require('./channels');
-const { validateOpenPath, validateLocalFile, hasPdfMagic } = require('./open-file');
+const { validateOpenPath, validateLocalFile, openRegular, hasPdfMagic } = require('./open-file');
 
 const MAX_BYTES = 512 * 1024 * 1024;
 const GRANT_TTL_MS = 10 * 60 * 1000;
@@ -50,24 +50,23 @@ function safeFileName(name) {
 const extensionOf = (name) => path.extname(name).slice(1).toLowerCase();
 
 /**
- * Open once, fstat the handle (so a swap after the check cannot change what
+ * Open once (openRegular: O_NOFOLLOW on POSIX, compensating checks on win32; BIGINT dev/ino), fstat the handle (so a swap after the check cannot change what
  * was measured), refuse anything that is not a regular file within the cap, and
  * read at most that many bytes. O_NONBLOCK keeps a FIFO from hanging open().
  * `expect` (from the grant): `{dev, ino}` must match the opened file, `nofollow`
  * adds O_NOFOLLOW (resolved paths only), `pdf` re-checks the `%PDF-` header.
  */
 async function readRegularFile(filePath, maxBytes = MAX_BYTES, expect = {}) {
-  const flags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (expect.nofollow ? fs.constants.O_NOFOLLOW : 0);
-  const handle = await fs.promises.open(filePath, flags);
+  const { handle, stat } = await openRegular(filePath, { nofollow: Boolean(expect.nofollow) });
   try {
-    const stat = await handle.stat();
     if (!stat.isFile()) throw new Error('not a regular file');
     if (expect.ino !== undefined && (stat.ino !== expect.ino || stat.dev !== expect.dev)) throw new Error('file changed since it was granted');
-    if (stat.size > maxBytes) throw new Error('file too large');
-    const buffer = Buffer.allocUnsafe(stat.size);
+    if (stat.size > BigInt(maxBytes)) throw new Error('file too large');
+    const size = Number(stat.size);
+    const buffer = Buffer.allocUnsafe(size);
     let offset = 0;
-    while (offset < stat.size) {
-      const { bytesRead } = await handle.read(buffer, offset, stat.size - offset, offset);
+    while (offset < size) {
+      const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);
       if (bytesRead === 0) break;
       offset += bytesRead;
     }

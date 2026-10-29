@@ -160,11 +160,13 @@ test('hasTestMarker: the marker is opened with O_NOFOLLOW', { skip: POSIX_ONLY }
 // mutation run in docs/desktop-windows.md).
 const WIN_RES = 'C:\\Users\\u\\AppData\\Local\\Programs\\BentoPDF\\resources';
 const WIN_MARKER = `${WIN_RES}\\${MARKER_NAME}`;
-function fakeWinFs({ resReal = WIN_RES, markerReal, lstat = {}, fstat = {}, token = MARKER_CONTENT, missing = false, opened = [] } = {}) {
+function fakeWinFs({ resReal = WIN_RES, markerReal, lstat = {}, fstat = {}, token = MARKER_CONTENT, missing = false, opened = [], closeThrows = false } = {}) {
+  const seen = [];
   // The directory the resources path really is (resReal) holds a perfectly valid marker, so a refusal can only
   // come from the check under test, never from the fake not knowing a path.
   const realMarker = `${resReal}\\${MARKER_NAME}`;
-  const file = { isFile: () => true, isSymbolicLink: () => false, dev: 7, ino: 4242, nlink: 1, size: MARKER_CONTENT.length };
+  // bigint stats, as the real win32 branch asks for them ({bigint:true}); overrides may be numbers or bigints.
+  const file = { isFile: () => true, isSymbolicLink: () => false, dev: 7n, ino: 4242n, nlink: 1n, size: BigInt(MARKER_CONTENT.length) };
   const enoent = (p) => Object.assign(new Error(`ENOENT ${p}`), { code: 'ENOENT' });
   const realpathSync = () => { throw new Error('the win32 branch must use realpathSync.native'); };
   realpathSync.native = (p) => {
@@ -175,14 +177,16 @@ function fakeWinFs({ resReal = WIN_RES, markerReal, lstat = {}, fstat = {}, toke
   return {
     constants: { O_RDONLY: 0 },
     realpathSync,
-    lstatSync: (p) => {
+    lstatSync: (p, o) => {
+      seen.push(o);
       if (missing || p.toLowerCase() !== realMarker.toLowerCase()) throw enoent(p);
       return { ...file, ...lstat };
     },
     openSync: (p) => { opened.push(p); return 99; },
-    fstatSync: () => ({ ...file, ...fstat }),
+    fstatSync: (_fd, o) => { seen.push(o); return { ...file, ...fstat }; },
     readSync: (_fd, buf) => buf.write(token),
-    closeSync: () => {},
+    closeSync: () => { if (closeThrows) throw new Error('EIO on close'); },
+    seen,
   };
 }
 const win = (fsImpl, res = WIN_RES) => hasTestMarker(res, { fsImpl, platform: 'win32' });
@@ -260,4 +264,22 @@ test('hasTestMarker win32 (real files): valid accepted; extra bytes, other token
       fs.unlinkSync(alias);
     }
   });
+});
+
+test('hasTestMarker win32 (fake fs): file ids are compared as 64-bit bigints (a difference beyond 2^53 is still a swap)', () => {
+  const big = 2n ** 60n;
+  assert.equal(win(fakeWinFs({ lstat: { ino: big }, fstat: { ino: big } })), true, 'same large id');
+  assert.equal(win(fakeWinFs({ lstat: { ino: big }, fstat: { ino: big + 1n } })), false, 'low bit differs, equal as doubles');
+  const fake = fakeWinFs();
+  assert.equal(win(fake), true);
+  assert.deepEqual(fake.seen, [{ bigint: true }, { bigint: true }], 'lstat and fstat both ask for bigint');
+});
+test('hasTestMarker: a throwing closeSync never turns a verdict into an exception (both branches)', () => {
+  assert.equal(win(fakeWinFs({ closeThrows: true })), true, 'win32 accepted');
+  assert.equal(win(fakeWinFs({ closeThrows: true, token: 'x'.repeat(MARKER_CONTENT.length) })), false, 'win32 refused');
+  if (process.platform !== 'win32') {
+    const throwing = { ...fakeFs({}), closeSync: () => { throw new Error('EIO on close'); } };
+    assert.equal(hasTestMarker(os.tmpdir(), { fsImpl: throwing }), true, 'posix accepted');
+    assert.equal(hasTestMarker(os.tmpdir(), { fsImpl: { ...throwing, fstatSync: () => ({ ...fakeFs({}).fstatSync(), nlink: 2 }) } }), false, 'posix refused');
+  }
 });
