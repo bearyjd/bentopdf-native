@@ -17,7 +17,7 @@ name: desktop-windows
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, feat/m5-windows-packaging] # TEMPORARY branch trigger: remove before final commit
     paths:
       - 'desktop/**'
       - 'packaging/**'
@@ -115,7 +115,11 @@ jobs:
           echo "ELECTRON_CACHE=$ELECTRON_CACHE" >> "$GITHUB_ENV"
           npm ci
 
-      - name: Remaining desktop unit tests (informational, several are POSIX-oriented)
+      # Blocking: the outcome is enforced by the "Enforce unit test result" step at the end, so the later
+      # steps (build, smoke) still run and report even when this one fails. POSIX-only tests are skipped
+      # inside the test files with a stated reason, never hidden here.
+      - name: Remaining desktop unit tests (blocking)
+        id: unit
         continue-on-error: true
         working-directory: desktop
         run: node --test --test-concurrency=1 test/open-file.test.js test/argv-policy.test.js test/normalise-modes.test.js test/ipc.test.js test/security.test.js test/static-files.test.js test/transport-http.test.js
@@ -228,3 +232,8 @@ jobs:
         run: |
           npm run lint
           node --test --test-concurrency=1 test/windows.test.js test/brand.test.js test/headers.test.js
+
+      - name: Enforce unit test result
+        if: ${{ !cancelled() }}
+        run: |
+          [ "${{ steps.unit.outcome }}" = success ] || { echo "::error::desktop unit tests failed on Windows (outcome: ${{ steps.unit.outcome }})"; exit 1; }

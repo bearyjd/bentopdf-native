@@ -56,6 +56,20 @@ function testLog(message) {
   fs.appendFileSync(path.join(app.getPath('userData'), 'bento-test-events.log'), `${process.pid} ${message}\n`);
 }
 
+// Test mode only, and only when the harness names a directory: one trace file per process, flushed on
+// every line, so a process that dies early (the second instance) still leaves evidence behind.
+function trace(message) {
+  const dir = process.env.BENTO_TEST_TRACE_DIR;
+  if (!testHeadless() || !dir) return;
+  try {
+    fs.appendFileSync(path.join(dir, `trace-${process.pid}.log`), `${Date.now()} ${message}\n`);
+  } catch (err) {
+    process.stderr.write(`[bento-test] trace failed: ${err.message}\n`);
+  }
+}
+trace(`start pid=${process.pid} ppid=${process.ppid} exec=${process.execPath} argv=${JSON.stringify(process.argv)} userData=${app.getPath('userData')}`);
+process.on('exit', (code) => trace(`process exit code=${code}`));
+
 function installMenu() {
   const showAbout = () =>
     dialog.showMessageBox({
@@ -72,17 +86,20 @@ function installMenu() {
 }
 
 const refused = unsafeSwitches(process.argv);
+trace(`unsafeSwitches=${JSON.stringify(refused)}`);
 if (refused.length > 0) {
   process.stderr.write(`[bento] refusing to start with unsafe switch(es): ${refused.join(' ')}\n`);
   app.exit(2);
 } else if (!TRANSPORTS.includes(transport)) {
   process.stderr.write(`BENTO_TRANSPORT must be one of ${TRANSPORTS.join(', ')}\n`);
   app.exit(2);
-} else if (!app.requestSingleInstanceLock()) {
+} else if (!(trace('requesting single-instance lock'), app.requestSingleInstanceLock())) {
+  trace('lock DENIED (this is the second instance)');
   log('another instance is already running; exiting');
   testLog('lock denied: this is the second instance, exiting');
   app.quit();
 } else {
+  trace('lock GRANTED (this is the first instance)');
   let handle = null;
   const waiting = []; // paths received before the window exists
 
@@ -101,10 +118,12 @@ if (refused.length > 0) {
   };
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
+    trace(`second-instance event argv=${JSON.stringify(argv)} cwd=${workingDirectory}`);
     testLog(`second-instance argv=${JSON.stringify(argv)} cwd=${workingDirectory}`);
     const unsafe = unsafeSwitches(argv, undefined, { secondInstance: true });
     if (unsafe.length > 0) {
       log(`ignored a second launch with unsafe switch(es): ${unsafe.join(' ')}`);
+      testLog(`ignored second launch: ${unsafe.join(' ')}`);
       return;
     }
     const win = handle && handle.window;

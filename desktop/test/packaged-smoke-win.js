@@ -42,7 +42,19 @@ async function until(fn, ms, what) {
   }
 }
 
-const baseEnv = () => ({ ...process.env, BENTO_DIST: 'Z:\\nonexistent', BENTO_TRANSPORT: 'carrier-pigeon' });
+const traceDir = path.join(work, 'trace');
+fs.mkdirSync(traceDir);
+let launchCount = 0;
+// Per-process trace files (BENTO_TEST_TRACE_DIR, test mode only) and Chromium's own log, so a process that
+// dies early still leaves evidence.
+const baseEnv = () => ({
+  ...process.env,
+  BENTO_DIST: 'Z:\\nonexistent',
+  BENTO_TRANSPORT: 'carrier-pigeon',
+  BENTO_TEST_TRACE_DIR: traceDir,
+  ELECTRON_ENABLE_LOGGING: '1',
+  ELECTRON_LOG_FILE: path.join(traceDir, `chromium-launch${++launchCount}.log`),
+});
 const testArgs = [`--user-data-dir=${profile}`];
 function launch(args, { testMode = true } = {}) {
   const child = spawn(exe, args, {
@@ -80,17 +92,31 @@ class Cdp {
   }
 }
 
-async function secondInstance(cdp, first) {
+const eventsFile = path.join(profile, 'bento-test-events.log');
+const readEvents = () => (fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, 'utf8') : '');
+
+function dumpTraces() {
+  for (const name of fs.readdirSync(traceDir).sort()) {
+    process.stdout.write(`--- ${name}\n${fs.readFileSync(path.join(traceDir, name), 'utf8').slice(0, 2500)}\n`);
+  }
+}
+
+async function secondInstance(cdp) {
   await cdp.js('window.__opened = []; window.bentoDesktop.onFileOpened((f) => window.__opened.push(f.name)); true');
   // A backslash path with a space and a non-ASCII letter, a file:// URL, and a UNC path that must be refused.
-  const second = launch([...testArgs, pdfB, pathToFileURL(pdfC).href, '\\\\127.0.0.1\\c$\\unc-refused.pdf'], {});
+  const second = launch([...testArgs, pdfB, pathToFileURL(pdfC).href, '\\\\127.0.0.1\\c$\\unc-refused.pdf']);
   const exited = await until(() => second.child.exitCode !== null && { code: second.child.exitCode }, 60000, 'second instance exit').catch(() => ({ code: 'timeout' }));
   check('second instance exits cleanly', exited.code === 0, `exit=${exited.code} stderr=${second.stderr.slice(0, 300).replace(/\s+/g, ' ')}`);
   check('second instance: backslash path with space and non-ASCII reached the first instance', await until(() => cdp.js('window.__opened.includes("second \\u00fc.pdf")'), 20000, 'forwarded file').catch(() => false));
   check('second instance: file:///C:/... URL reached the first instance', await until(() => cdp.js('window.__opened.includes("third.pdf")'), 20000, 'forwarded URL').catch(() => false));
   await wait(1500);
-  check('second instance: UNC path was refused (no grant)', !(await cdp.js('window.__opened.includes("unc-refused.pdf")')));
-  check('second instance: argv was not rejected by the switch policy (shows what Windows injects)', !/ignored a second launch/.test(first.stderr), (first.stderr.match(/ignored a second launch.*/) || [''])[0]);
+  // The next two are only meaningful if the second-instance event provably arrived and was processed; with no
+  // event, "nothing was granted" would look like "refused", so absence of evidence is a FAIL.
+  const events = readEvents();
+  const delivered = /second-instance argv=/.test(events);
+  check('second-instance event arrived in the first instance (positive evidence)', delivered, delivered ? '' : 'no second-instance event in the test event log');
+  check('second instance: UNC path was refused (no grant)', delivered && !events.includes('granted unc-refused.pdf') && !(await cdp.js('window.__opened.includes("unc-refused.pdf")')), delivered ? '' : 'FAIL: nothing delivered, refusal not proven');
+  check('second instance: argv was not rejected by the switch policy (shows what Windows injects)', delivered && !/ignored second launch/.test(events), delivered ? (events.match(/ignored second launch.*/) || [''])[0] : 'FAIL: nothing delivered, policy not exercised');
   killTree(second.child);
 }
 
@@ -141,13 +167,13 @@ async function main() {
     const head = await cdp.js(`window.bentoDesktop.readFile(${JSON.stringify(taken[0] && taken[0].token)}).then((b) => new TextDecoder().decode(b.slice(0, 8)))`);
     check('granted file is readable via its token', head === '%PDF-1.4', head);
 
-    await secondInstance(cdp, first);
+    await secondInstance(cdp);
   } finally {
     killTree(first.child);
     await wait(1500);
     process.stdout.write(`first instance stderr (first 3000 chars): ${first.stderr.slice(0, 3000).replace(/\s+/g, ' ')}\n`);
-    const events = path.join(profile, 'bento-test-events.log');
-    process.stdout.write(`test events:\n${fs.existsSync(events) ? fs.readFileSync(events, 'utf8').slice(0, 4000) : '(none)'}\n`);
+    process.stdout.write(`test events:\n${readEvents().slice(0, 4000) || '(none)'}\n`);
+    dumpTraces();
   }
   await slashSwitchRefused();
 }
