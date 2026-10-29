@@ -217,6 +217,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # SMOKE flavour (issue #13): the same source with the real test mode, for the test-mode smoke checks only. No
+      # secret is in this step's environment and the build refuses to run if any signing variable is set
+      # (desktop/tools/flavour.js). Output: desktop/release-smoke/, named SMOKE-ONLY-NOT-FOR-DISTRIBUTION; never uploaded.
+      - name: Build SMOKE-flavour packages (test mode inside, never signed, never uploaded)
+        env:
+          BENTO_FLAVOUR: smoke
+        run: bash scripts/package-windows.sh
+
       - name: Authenticode status (informational, unsigned builds are expected without secrets)
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -241,11 +249,17 @@ jobs:
             bash packaging/verify-artifact-win.sh "${flags[@]}" --config "$cfg" "$f"
           done
           bash packaging/verify-artifact-win.sh "${flags[@]}" --config "$cfg" --tree desktop/release/win-unpacked --kind unpacked
+          # The smoke flavour is gated as what it is (--flavour smoke) and never with --release.
+          for f in desktop/release-smoke/*-setup-*.exe desktop/release-smoke/*-portable-*.exe; do
+            [ -f "$f" ] || { echo "::error::no smoke artifact matches the glob (got '$f')"; exit 1; }
+            bash packaging/verify-artifact-win.sh --flavour smoke "$f"
+          done
+          bash packaging/verify-artifact-win.sh --flavour smoke --tree desktop/release-smoke/win-unpacked --kind unpacked
 
       - name: Mutation test of the gate
         if: ${{ !cancelled() }}
         run: |
-          bash packaging/test-verify-artifact-win.sh --seed desktop/release/win-unpacked \
+          bash packaging/test-verify-artifact-win.sh --seed desktop/release/win-unpacked --smoke-seed desktop/release-smoke/win-unpacked \
             --installer "$(ls desktop/release/*-setup-*.exe)" --portable "$(ls desktop/release/*-portable-*.exe)"
 
       - name: Install, smoke test and uninstall (runs the real installer on this runner)
@@ -255,7 +269,7 @@ jobs:
         run: |
           flags=()
           [ "$IS_TAG" = true ] && flags+=(--release)
-          bash packaging/windows/smoke-installer.sh "$(ls desktop/release/*-setup-*.exe)" "$(ls desktop/release/*-portable-*.exe)" "${flags[@]}"
+          bash packaging/windows/smoke-installer.sh "$(ls desktop/release/*-setup-*.exe)" "$(ls desktop/release/*-portable-*.exe)" "$(ls desktop/release-smoke/*-setup-*.exe)" "${flags[@]}"
 
       # KNOWN FAILURE (issue #11): the portable exe's second instance does not forward its file, and the portable
       # cannot enter test mode (its stub wipes the extraction directory, so no marker can be placed). The smoke
