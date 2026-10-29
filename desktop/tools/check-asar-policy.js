@@ -70,6 +70,7 @@ try {
   expect('marker owned by another uid', hasTestMarker(tmp, { uid: process.getuid() + 1 }), false);
   write(MARKER_CONTENT + 'x'); expect('marker with extra bytes', hasTestMarker(tmp), false);
   write('wrong-token-of-the-same-length\n'.slice(0, MARKER_CONTENT.length)); expect('marker with another token', hasTestMarker(tmp), false);
+  write(MARKER_CONTENT.replace('v1', 'v2')); expect('marker with a same-length, same-prefix token', hasTestMarker(tmp), false);
   write(MARKER_CONTENT, 0o664); expect('group-writable marker', hasTestMarker(tmp), false);
   write(MARKER_CONTENT, 0o602); expect('world-writable marker', hasTestMarker(tmp), false);
   write(); fs.linkSync(marker, path.join(tmp, 'second-name')); expect('hard-linked marker', hasTestMarker(tmp), false);
