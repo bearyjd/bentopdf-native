@@ -133,6 +133,7 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
       table.delete(token);
       throw new Error('file token expired');
     }
+    if (grant.bytes) return grant.bytes;
     return readRegularFile(grant.filePath, MAX_BYTES, grant);
   });
 
@@ -180,9 +181,25 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
    * Main-process-initiated grant for a path that came from the OS, never from
    * the renderer. Same checks as the dialog path (.pdf, regular file, size cap).
    */
-  const openPath = async (webContents, filePath) => {
+  /**
+   * Main-process grant of a path for one WebContents, without pushing it to the
+   * page (the shell's document handoff). Same checks as openPath; `expect`
+   * ({dev, ino}, from the document store) must still match the file.
+   */
+  const grantPath = async (webContents, filePath, expect = {}) => {
     const { size, filePath: resolved, dev, ino } = await validateOpenPath(filePath, MAX_BYTES);
-    const entry = issue(tableFor(webContents), resolved, size, { dev, ino, nofollow: true, pdf: true });
+    if (expect.ino !== undefined && (expect.ino !== ino || expect.dev !== dev)) throw new Error('file changed since it was opened');
+    return issue(tableFor(webContents), resolved, size, { dev, ino, nofollow: true, pdf: true });
+  };
+
+  /** Grant for an in-memory PDF (bytes held by the main process, never a path). */
+  const grantBytes = (webContents, name, bytes) => {
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_BYTES || !hasPdfMagic(bytes)) throw new Error('not a PDF within the size cap');
+    return issue(tableFor(webContents), safeFileName(name), bytes.byteLength, { bytes });
+  };
+
+  const openPath = async (webContents, filePath) => {
+    const entry = await grantPath(webContents, filePath);
     const state = openedFor(webContents);
     if (state.listening) webContents.send(CHANNELS.fileOpened, entry);
     else state.queue.push(entry);
@@ -192,7 +209,7 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now }) {
   const dispose = () => {
     for (const channel of Object.values(CHANNELS)) ipcMain.removeHandler(channel);
   };
-  return Object.assign(dispose, { openPath });
+  return Object.assign(dispose, { openPath, grantPath, grantBytes });
 }
 
 module.exports = {

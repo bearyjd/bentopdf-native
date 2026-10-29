@@ -105,3 +105,28 @@ test('save allowlist has no executable or script types', () => {
     assert.ok(!SAVE_EXTENSIONS.includes(ext), ext);
   }
 });
+
+test('grantPath: shell handoff grant is per WebContents, validated, and identity-checked', async () => {
+  const h = harness();
+  const pdf = file('handoff.pdf', '%PDF-1.4\nbody');
+  const entry = await h.dispose.grantPath(h.sender, pdf);
+  assert.equal(Buffer.from(await h.call(CHANNELS.readFile, entry.token)).toString().slice(0, 5), '%PDF-');
+  const { ino, dev } = fs.statSync(pdf);
+  await h.dispose.grantPath(h.sender, pdf, { ino, dev });
+  await assert.rejects(h.dispose.grantPath(h.sender, pdf, { ino: ino + 1, dev }), /changed since it was opened/);
+  await assert.rejects(h.dispose.grantPath(h.sender, file('nope.pdf', 'plain text')), /not a PDF/);
+  await assert.rejects(h.dispose.grantPath(h.sender, file('x.txt', '%PDF-')), /not a .pdf/);
+  const other = Object.assign(new EventEmitter(), { id: 2 });
+  const foreign = await h.dispose.grantPath(other, pdf);
+  await assert.rejects(h.call(CHANNELS.readFile, foreign.token), /unknown file token/, 'a grant for another view is not readable here');
+});
+
+test('grantBytes: in-memory PDFs only, read back without touching disk', async () => {
+  const h = harness();
+  const bytes = new Uint8Array(Buffer.from('%PDF-1.7\nmem'));
+  const entry = h.dispose.grantBytes(h.sender, '../evil/mem.pdf', bytes);
+  assert.equal(entry.name, 'mem.pdf');
+  assert.equal(await h.call(CHANNELS.readFile, entry.token), bytes);
+  assert.throws(() => h.dispose.grantBytes(h.sender, 'a.pdf', new Uint8Array(3)), /not a PDF/);
+  assert.throws(() => h.dispose.grantBytes(h.sender, 'a.pdf', 'string'), /not a PDF/);
+});
