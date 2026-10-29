@@ -136,12 +136,44 @@ NOT VERIFIED beyond the CI smoke loading the app.
 ## Sandbox
 
 `sandbox: true` and context isolation are set for every window (`src/security.js`). The packaged smoke runs
-the app in **test mode** (`BENTO_TEST_HEADLESS=1`): the window is created hidden and never shown, nothing
-appears on screen, and the app writes `app.getAppMetrics()` (`sandboxed`, `integrityLevel` per process) to the
-profile directory. The smoke asserts every renderer (`Tab`) is `sandboxed: true` at `untrusted` or `low`
-integrity. This is Electron's own report of the OS-level sandbox, **only proven if the Windows run succeeded**.
-Test mode also admits the debugging switches the smoke needs; as on Linux, anyone who can set environment
-variables for the process can enable it, which is outside this threat model (they can already run the exe).
+the app in **test mode**: the window is created hidden and never shown, nothing appears on screen, and the app
+writes `app.getAppMetrics()` (`sandboxed`, `integrityLevel` per process) to the profile directory. The smoke asserts
+every renderer (`Tab`) is `sandboxed: true` at `untrusted` or `low` integrity. This is Electron's own report of the
+OS-level sandbox, **only proven if the Windows run succeeded**.
+
+### Test mode on Windows (marker file)
+
+As on Linux, a packaged build enters test mode only with `BENTO_TEST_HEADLESS=1` in the environment **and** the
+marker file `resources\.bento-test-mode` (`src/test-mode.js`); every test-only behaviour in `main.js` (hidden window,
+debugging switches, event log, trace, sandbox report) keys off that combined result. Release artifacts never contain
+the marker (`verify-artifact-win.sh` fails if one is found, any case). Windows has no uid or mode bits, so the win32
+branch checks what it can:
+
+- `process.resourcesPath` is its own native real path (`realpathSync.native`, compared case-insensitively as NTFS
+  does): a junction, symlink or 8.3 short name in the path fails closed;
+- the marker is found with `lstat` directly inside that directory, is a regular file and not a symlink/junction;
+- its own native real path is exactly `<resources>\.bento-test-mode` (no other reparse point redirects it);
+- the handle that is read is the file that was `lstat`ed (same `dev`/`ino`), has one hard link, exactly the token's
+  size and exactly the token.
+
+**Ownership and write permission are not checked; they are left to the install directory's ACLs.** A per-machine
+install under `Program Files` is writable only by administrators. A per-user install under `%LOCALAPPDATA%` is
+writable by that user, who can equally replace the executable itself, so the marker grants nothing extra there.
+As on Linux this is a tripwire, not a boundary: Chromium parses the debugging switch before any JavaScript runs.
+The checks run as unit tests on every platform against a fake fs (each single check removed turns a test red), on
+real NTFS files on `windows-latest` (`test-mode.test.js`, and `tools/check-asar-policy.js` inside the Windows gate),
+and the gate also requires each control's text in the packaged `test-mode.js`.
+
+The CI smoke (`packaging/windows/smoke-installer.sh`) runs the gate on the installed tree first, then
+`desktop/test/packaged-smoke-win.js`, which proves the installed copy refuses the test switches WITHOUT the marker
+(exit 2, no debug port), writes the marker into that disposable installed copy, runs the checks and removes it
+again; the lifecycle script asserts it is gone before the uninstall assertions ("no files left").
+
+**The portable exe cannot enter test mode.** Its stub extracts the app to `%TEMP%\<dir>` at every launch and runs
+`RMDir /r` on that directory first (`app-builder-lib/templates/nsis/portable.nsi`, also when `portable.unpackDirName`
+fixes the name), so a pre-placed marker is always deleted. The portable smoke therefore runs only what needs no test
+mode (refusal of the test switches without the marker, `/no-sandbox` refused with exit 2, no registry/shortcut traces;
+the payload itself is gated by 7-Zip extraction) and prints the rest as NOT VERIFIED.
 
 ## Offline behaviour
 
@@ -171,7 +203,9 @@ dialog and `SOURCE.txt`, as on Linux.
 
 - x64 only (no arm64, no 32-bit). No Microsoft Store/MSIX, no winget manifest, no auto-update.
 - Network shares (UNC) are refused for open-with; mapped drives are not distinguished.
-- The portable exe leaves its unpacked copy in `%TEMP%` while running.
+- The portable exe leaves its unpacked copy in `%TEMP%` while running, and wipes that directory (`RMDir /r`) at every
+  launch, including a second launch while the first is still running from it (a plausible cause of issue #11, NOT verified).
+- The portable exe cannot be smoke-tested in test mode (see "Test mode on Windows").
 - The `.ico` is rendered from the same neutral glyph as the PNG; the product-name trademark question is unchanged.
 - The bundled upstream pages do not consume open-with events yet (M3 viewer).
 
