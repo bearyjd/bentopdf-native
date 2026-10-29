@@ -16,16 +16,17 @@ over the content area and showing an unmodified upstream page from
 BrowserWindow  (partition bento-shell, shell-preload.js, bento://shell/shell.html)
  ├─ WebContentsView tab 1  (partition bento-tab-1, preload.js, bento://app/merge-pdf.html)
  ├─ WebContentsView tab 2  (partition bento-tab-2, preload.js, bento://app/index.html)
- └─ ...                    (at most maxLive = 3 alive; older background tabs discarded)
+ └─ ...                    (live-view budget of 6 slots; older background tabs discarded)
 ```
 
 | File (`desktop/src/shell/`) | Role |
 |---|---|
 | `shell-app.js` | `startShell()`: wires everything; `main.js` uses it (scheme transport) |
-| `sessions.js` | `prepareSession()`: the per-partition lockdown (below); the shell UI's CSP |
-| `tab-manager.js`, `tab-policy.js` | tabs as frozen records; live-view cap (pure, unit-tested) |
+| `sessions.js` | `prepareSession()`: the per-partition lockdown (below); the shell UI's CSP; `releaseSession()` |
+| `bounded.js` | ring buffers / bounded sets / log rate limit / per-key serialisation |
+| `tab-manager.js`, `tab-policy.js`, `live-budget.js` | tabs as frozen records; weighted live-view budget (pure, unit-tested; every number in `live-budget.js`) |
 | `tab-views.js` | Electron adapter: one `WebContentsView` per live tab, layout |
-| `document-store.js` | open documents (main process only) |
+| `document-store.js` | open documents (main process only); freed when their last tab closes |
 | `recents.js` | recent files, JSON in `userData/recents.json` |
 | `tool-registry.js` | tool list derived from `dist/` at startup |
 | `handoff.js` | per-tool adapters and the handoff script |
@@ -33,9 +34,14 @@ BrowserWindow  (partition bento-shell, shell-preload.js, bento://shell/shell.htm
 | `shell-menu.js` | application menu and shortcuts |
 | `ui/` | the shell page (HTML/CSS/JS, no framework, DOM via `textContent` only) |
 
-`BENTO_TRANSPORT=http` (dev only) still starts the single-window M2 app: the shell
-is scheme-only (the loopback transport's secret cookie is set on the default
-session only).
+`BENTO_TRANSPORT=http` is a **TEST-ONLY harness**, not a way to use the app: it
+starts the legacy single-window M2 app (no tabs, no shell UI) so the old
+per-tool scenarios keep running; it is ignored when packaged, logs a warning
+and is labelled as such in the tests (`single-window harness e2e`). The default
+start path is the shell (`src/start-mode.js`, unit-tested). The shell is
+scheme-only (the loopback transport's secret cookie is set on the default
+session only). The window title is `brand.json`'s `productName`, set by the
+main process (`shell.html`'s own `<title>` is ignored).
 
 ## Security model (what changed relative to M2)
 
@@ -50,8 +56,13 @@ tab. In addition:
   of that partition is created; a `WeakSet` makes it idempotent.
 - **Partitions** are in-memory (`bento-tab-<id>`, no `persist:`), one per tab,
   ids only grow, so a new tab never inherits a closed tab's storage. Closing a
-  tab also calls `clearStorageData()`. Consequence: upstream settings kept in
-  `localStorage` (e.g. language, WASM settings) are per tab and per run.
+  tab also empties its session (`releaseSession`: storage, HTTP cache, DNS
+  cache, auth cache, open connections). **Electron cannot destroy a Session**:
+  `session.fromPartition()` keeps the object, its protocol handler and its
+  lockdown for the life of the process, so this is best effort and a closed
+  tab's (empty) session object lives until quit. Consequence of the in-memory
+  partitions: upstream settings kept in `localStorage` (language, WASM settings,
+  ...) do **not** persist, neither across tabs nor across restarts (see TODO).
 - **Two origins, two bridges.**
   - Tool pages: `bento://app`, `preload.js` (`window.bentoDesktop`), tool IPC
     accepts only the top frame at `bento://app` (unchanged M2 check).
@@ -76,13 +87,33 @@ tab. In addition:
 - **Documents live in the main process.** `document-store.js` accepts a path
   only through `validateOpenPath` (`.pdf`, realpath, regular file, 512 MiB cap,
   `%PDF-` magic) and keeps path, `dev`, `ino`; renderers see `{id, name, size}`.
-  Max 32 open documents. In-memory documents (bytes) are supported by the store
-  and the grant layer but nothing creates them yet.
+  A document is removed when the last tab showing it closes (or navigates to
+  another document). The earlier hard limit of 32 documents per run (which made
+  every open fail after the 32nd, because nothing ever removed a document) is
+  **gone**: the store still holds at most 32 documents at once, evicts the least
+  recently used one no tab shows when full, and fails with "close a tab first"
+  only when 32 are all shown in tabs. In-memory documents (bytes) are supported
+  by the store and the grant layer but nothing creates them yet.
+- **No network paths.** A path starting with two slashes or backslashes (UNC,
+  `\\?\UNC\`) is refused on every platform in `validateOpenPath`, the store,
+  recents and the command-line filter (it can leak NTLM credentials or hang on
+  a dead server).
+- **Native dialogs belong to the active tab.** `openFile`/`saveFile` of the tool
+  bridge are refused for any WebContents that is not the active tab's view, so a
+  hidden background tab cannot open one.
+- **Bounded main-process state.** The blocked-request list, permission
+  decisions, handoff records and the allowed-URL set are capped at 200 entries
+  (oldest dropped); blocked/permission log lines are rate-limited per
+  partition (20 a minute, then one "suppressed" notice).
+- **Handoff script** runs with `executeJavaScript(script, false)`: no user
+  activation is granted to the page.
 - **Recents**: at most 10, written atomically with mode 0600, parsed as hostile
   input (wrong types, relative paths, non-`.pdf`, NUL, >4096 chars, >64 KiB
-  file are dropped). The renderer gets random per-run ids. Opening a recent
-  re-runs the full `validateOpenPath`; a failure removes the entry. Never
-  auto-opened at startup.
+  file are dropped, as are network paths). The renderer gets random
+  per-run ids. Opening a recent re-runs the full `validateOpenPath`; only a
+  **confirmed** failure (file gone: ENOENT/ENOTDIR/ELOOP, or not an acceptable
+  PDF) removes the entry; a transient error (EACCES, EIO, EBUSY, ...) keeps it
+  and reports "try again". Never auto-opened at startup.
 
 Shell bridge (`window.bentoShell`): `listTools()`, `getState()` (tabs, open
 documents, recent files), `openTool(toolId, docId?)`, `switchTab(id)`,
@@ -94,7 +125,9 @@ every `stateChanged` push.
 
 `openTool(toolId, docId?)` loads the tool into the active tab (a new one if
 there is none) and keeps the tab's document unless another is given. After the
-page loads, the main process:
+page loads, the main process (in the **background**: `openTool`, `switchTab`
+and friends return as soon as the page has loaded, they no longer wait up to
+31.5 s for the handoff):
 
 1. issues a grant for **that tab's WebContents only** (`grantPath`: same checks
    as an OS open, plus the file's `dev`/`ino` must still match what the store
@@ -104,24 +137,36 @@ page loads, the main process:
    M2 scenario), then calls the existing `window.bentoDesktop.handoffToInput`,
    which reads the bytes back over the tool IPC with the token.
 
+While it runs the tab has a status ("Loading x.pdf into Merge PDF...") and a
+failure (e.g. "file changed since it was opened", no matching input within 30 s)
+is shown on the shell's status line for the active tab; a handoff superseded by
+a newer one, or into a discarded view, is dropped silently. Concurrent opens of
+the same path are serialised (one document, one tab).
+
 Adapters (`handoff.js`): `merge-pdf` -> `#file-input`, multiple. Every other
 tool uses `input[type="file"]`, single file: **only Merge PDF is tested.**
-The M2 DOM-input handoff is therefore still the only handoff mechanism (the
-roadmap's "documents by id, tool adapters that return results" is not built:
-tool output still goes through the page's own download/save path, not back
-into the store).
+This is **PARTIAL**: a selector table feeding the M2 `handoffToInput`, Merge
+PDF verified only, **no return path** (the roadmap's "documents by id in and
+out" is not built: tool output still goes through the page's own download/save
+path, not back into the store).
 
-## Tabs and the memory cap
+## Tabs and the live-view limit
 
-At most `maxLive` (default 3) tab views are alive. Opening or activating a tab
-discards the least recently active background views beyond the cap
-(`webContents.close()`; the active tab is never discarded). A discarded tab
-keeps its page, tool and document id; activating it creates a fresh view in the
-same partition, reloads the page and hands the document over again. In-page
-state (tool options, an unfinished job) is lost on discard. The cap is a count,
-not a memory measurement: three LibreOffice tabs could still need ~5 GiB
-(docs/m2-findings.md: ~1.7 GiB each). In-page navigation to another tool is
-remembered for the reload.
+Live views are limited by a **weighted slot budget** (`live-budget.js`, all
+numbers in that one file): default 6 slots; an ordinary tool or the landing page
+weighs 1, OCR 2, a LibreOffice conversion 4 (14 tools: Word/Excel/PowerPoint/
+ODF/RTF/... to PDF and PDF to Word). The weights are an **estimate from the M2
+findings** (one LibreOffice run ~1.7 GiB peak RSS, OCR ~0.9 GiB; one slot is
+about 0.4 GiB), not a measurement of the running machine. Opening, activating
+or navigating a tab discards the least recently active background views until
+the live weights fit (`webContents.close()`; the active tab is never discarded,
+even if it alone exceeds the budget). So one LibreOffice tab plus two ordinary
+ones fits; a second LibreOffice tab discards the first. A discarded tab keeps
+its page, tool and document id; activating it creates a fresh view in the same
+partition, reloads the page and hands the document over again. The lockdown is
+asserted again on the reloaded view (e2e). In-page state (tool options, an
+unfinished job) is lost on discard. Real memory under load: NOT VERIFIED.
+In-page navigation to another tool is remembered for the reload.
 
 ## Tool registry
 
@@ -129,8 +174,9 @@ Built at startup from `dist/*.html` (excluding `404, about, contact, faq,
 licensing, privacy, terms, index, tools` and anything matching
 `kura|hyper-compress`). Names and categories come from the cards of
 `dist/tools.html` (`<h2>` section, `<a href="/id"><h3>Name</h3>`). On the
-current bundle: 129 entries, 118 with a category (7 upstream sections, one of
-them "Popular Tools", which is a section, not a subject), 11 without (hub
+current bundle: **129 pages, 118 categorised** (upstream's categories, not
+Acrobat's; 7 upstream sections, one of them "Popular Tools", which is a section,
+not a subject), 11 without (hub
 pages `pdf-converter`, `pdf-editor`, `pdf-merge-split`, `pdf-security`, the six
 `compress-pdf-to-*`/`for-email` SEO pages, `wasm-settings`): the sidebar shows
 them under "Other". Limits: this parses upstream's rendered HTML, which is not
@@ -162,28 +208,57 @@ WebContents has focus. macOS gets the `appMenu` role; `CmdOrCtrl` maps to Cmd.
     recorded **for that partition**; `localStorage`/`sessionStorage` not shared
     tab-to-tab or tab-to-shell; switchTab; every request of every partition
     internal, nothing blocked.
-  - `shellHandoff`: Merge PDF opened for the active document lists it.
-  - `shellMemcap`: cap 2, three documents -> the first view is destroyed, its
+  - `shellHandoff`: two documents open; Merge PDF opened for the one that is
+    not active lists exactly that one (never the other), the store entry is
+    touched, the unshown one is released.
+  - `shellHandoffError`: the file is replaced (new inode) after it was opened;
+    the tool opens, the IPC returns, and the failure ("file changed since it
+    was opened") appears in the tab status and on the shell's status line.
+  - `shellMemcap`: budget 2, three documents -> the first view is destroyed, its
     document kept; activating it gives a fresh view, the same page and the
-    document listed in Merge PDF again.
+    document listed in Merge PDF again, with isolation headers, permission
+    lock and request blocking still in force on that partition.
+  - `shellLifecycle`: concurrent opens of one path give one document and one
+    tab; 33 distinct PDFs opened and closed in one run; a closed tab's
+    `localStorage` is gone; the window title is the brand name.
+  - `shellTeardown`: closing the shell destroys every tab WebContents and has
+    removed the resize listener before the window is destroyed.
   - `shellIpcReject`: shell IPC from the shell preload in a tool partition and
     from a second `bento://shell` page, and tool IPC from the tool preload at
-    `bento://shell`, are all refused; positive control from the real shell.
+    `bento://shell`, are all refused; positive control from the real shell;
+    `openFile`/`saveFile` refused from a hidden background tab, allowed from the
+    active one.
 - Mutation checks (each must turn a test red): see the M3 section of
   [ROADMAP.md](ROADMAP.md).
+- Known flake (not caused by the shell): the legacy single-window `mergeOffline`
+  scenario on loopback http could fail on a Chromium `ERR_CACHE_MISS` font
+  preload (2 of 6 runs on main); it now tolerates that for font files only.
+- The legacy single-window scenarios `handoff`, `libreoffice`, `ocr`, `bigPdf`
+  need `upstream/node_modules` (pdf-lib); a fresh worktree without it fails
+  them with "pdf-lib not found" (run `scripts/build-local.sh` once).
 
 ## Not verified
 
 - A visible window: the shell has only ever run headless. Layout, focus,
   keyboard shortcuts (accelerators are only unit-tested as data) and menus
-  were never seen or pressed.
+  were never seen or pressed. **The window is still unseen.**
 - Native open dialog (stubbed in tests), drag and drop (not implemented).
 - Handoff to any tool other than Merge PDF.
-- Memory under real multi-tab load (the cap is unit- and e2e-tested by count only).
+- Memory under real multi-tab load: the slot weights are estimates from M2
+  numbers, never measured on a running shell.
 - Print, annotation, text editing, redaction, signing in the shell.
-- macOS and Windows; packaged builds were not rebuilt. `test/packaged-smoke.js`
-  was adapted to the shell but not run. Serving from asar was only probed: the
-  `ui/` folder packed with `@electron/asar` and served by `serveStatic` in a
-  headless Electron (Electron 45.1.0, unpackaged, no fuses) gave 200 for
-  `shell.html`/`shell.js` with the right lengths and 404 for a missing file.
-  A real packaged build was not tried.
+- macOS and Windows (including the UNC rules, which are unit-tested as strings
+  on Linux only).
+- PACKAGED_PLACEHOLDER
+
+## TODO (issue-ready)
+
+**Persist upstream tool settings across tabs and restarts.** Tab partitions are
+in-memory (`bento-tab-<id>`, no `persist:`), so anything upstream keeps in
+`localStorage`/IndexedDB (language, WASM/LibreOffice settings, preferences)
+is lost when a tab closes, per tab and on every restart. Needed: a decision
+between (a) one persistent partition shared by all tabs (weakens the per-tab
+storage isolation proven in `shellTabs`), (b) per-tool persistent partitions,
+or (c) the main process storing a small allow-listed settings blob and
+injecting it at load. Acceptance: settings survive a restart, tab-to-tab
+storage isolation test still passes, nothing outside the allow-list persists.

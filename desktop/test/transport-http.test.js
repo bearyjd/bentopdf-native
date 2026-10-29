@@ -1,5 +1,7 @@
 'use strict';
 
+// The loopback http transport is a TEST-ONLY harness for the legacy single-window app (src/start-mode.js);
+// the tabbed shell never uses it. These tests keep it honest for as long as the harness exists.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');

@@ -1,5 +1,8 @@
 'use strict';
 
+// LEGACY SINGLE-WINDOW HARNESS (M2 app, src/app.js startApp; no tabs, no shell UI). Kept on purpose: the
+// per-tool scenarios (merge, OCR, LibreOffice, ...) still run in it. The product start path is the tabbed
+// shell, covered by shell-e2e.test.js; BENTO_TRANSPORT=http is TEST-ONLY (src/start-mode.js).
 // Spawns a real Electron process (one per transport and scenario) against ../dist (needs a display).
 // Default --ozone-platform=headless (set BENTO_E2E_OZONE=wayland|x11 for a real window; on the
 // dev machine a real window gets no animation frames, which stalls pdf.js rendering).
@@ -39,7 +42,7 @@ function runElectron(transport, scenario) {
 }
 
 for (const transport of transports) {
-  describe(`electron e2e [${transport}]`, () => {
+  describe(`single-window harness e2e [${transport}] (test-only, not the shell)`, () => {
     for (const name of selected) {
       it(name, (t) => {
         const report = runElectron(transport, name);

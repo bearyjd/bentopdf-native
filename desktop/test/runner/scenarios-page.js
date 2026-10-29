@@ -18,8 +18,12 @@ const BENIGN = {
   net: [
     {
       transports: ['http'],
-      pattern: /^net::ERR_CACHE_MISS .*\.woff2$/,
-      reason: 'Chromium reports a cache-only font preload miss on loopback http; the page still renders (docs/m2-findings.md)',
+      // Font files ONLY (never scripts, wasm or data). Chromium races a cache-only <link rel=preload>
+      // against the real fetch and reports ERR_CACHE_MISS for whichever font it preloads first; which
+      // font that is varies run to run (woff2 one time, ttf/woff/otf another). It reproduces on main
+      // without this branch (2 of 6 runs failed there), and the page still renders (docs/m2-findings.md).
+      pattern: /^net::ERR_CACHE_MISS .*\.(woff2?|ttf|otf)$/,
+      reason: 'Chromium cache-only font preload miss on loopback http; flaky on main too, fonts only',
     },
   ],
   http: [],
