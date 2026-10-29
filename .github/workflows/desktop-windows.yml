@@ -7,9 +7,10 @@ name: desktop-windows
 # repository secrets named below exist (see docs/desktop-windows.md); without them the output is unsigned.
 #
 # `paths:` do not apply to tag pushes (GitHub workflow syntax reference), so every v* tag builds.
-# The workflow was verified on a real windows-latest runner from the feat/m5-windows-packaging branch with a
-# temporary branch trigger (runs 40799612108, 40801299255, 40802920084, 40805536068; see docs/desktop-windows.md);
-# that trigger has been removed. It never runs on pull_request.
+# The workflow was verified on a real windows-latest runner from the feat/m5-windows-on-main branch (rebased onto
+# main's marker-gated test mode) with a temporary branch trigger: runs 40840883624 (3 unit-test failures from main's
+# POSIX-only test assumptions) and 40845803115 (green; see docs/desktop-windows.md). That trigger has been removed.
+# It never runs on pull_request.
 #
 # Action pins were checked with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` (commit objects) on 2026-10-28:
 # checkout v7.0.1, setup-node v7.1.0, upload-artifact v7.0.2 (same pins as desktop-linux.yml) and
@@ -17,9 +18,7 @@ name: desktop-windows
 on:
   workflow_dispatch:
   push:
-    # TEMPORARY: feat/m5-windows-on-main is here only to verify this workflow on windows-latest before it
-    # exists on main (workflow_dispatch needs the file on the default branch). Removed before merge.
-    branches: [main, feat/m5-windows-on-main]
+    branches: [main]
     paths:
       - 'desktop/**'
       - 'packaging/**'

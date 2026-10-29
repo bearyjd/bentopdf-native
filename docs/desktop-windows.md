@@ -10,10 +10,10 @@ run named in the status section succeeded. Everything else says NOT VERIFIED.
 
 See "What was and was not verified" at the end. In short: the Windows build configuration was
 exercised on Linux up to the unpacked app (a real `win-unpacked` tree with fuses flipped; the NSIS
-step needs Wine and cannot run here); the installer, uninstaller, registry, shortcuts and sandbox
-were exercised by the GitHub Actions workflow `desktop-windows.yml` on `windows-latest`. **The last run
-(40813630518) is red** only because the PORTABLE exe's second-instance forwarding does not work (installed app: 21/21
-smoke checks passed). See "What was and was not verified".
+step needs Wine and cannot run here); the installer, uninstaller, registry, shortcuts, marker-gated test mode
+and sandbox were exercised by `desktop-windows.yml` on `windows-latest`. **The last run (40845803115) is green**;
+the portable exe's second-instance forwarding (issue #11) runs as a separate, non-blocking step that is listed as a
+KNOWN FAILURE in the job summary and is NOT VERIFIED (the portable cannot enter test mode).
 
 ## Prerequisites (build)
 
@@ -32,7 +32,7 @@ bash ../scripts/package-windows.sh          # NSIS installer + portable exe into
 bash ../packaging/verify-artifact-win.sh release/bentopdf-native-*-setup-x64.exe
 bash ../packaging/verify-artifact-win.sh release/bentopdf-native-*-portable-x64.exe
 bash ../packaging/test-verify-artifact-win.sh --seed release/win-unpacked   # mutation test of the gate
-node test/packaged-smoke-win.js "release/win-unpacked/BentoPDF Native.exe"  # headless smoke, no visible window
+node test/packaged-smoke-win.js "<COPY of win-unpacked>/BentoPDF Native.exe"  # headless smoke; writes and removes the test-mode marker in that tree, so never point it at release output
 ```
 
 Outputs: `bentopdf-native-<version>-setup-x64.exe` (NSIS) and `bentopdf-native-<version>-portable-x64.exe`.
@@ -212,34 +212,39 @@ dialog and `SOURCE.txt`, as on Linux.
 ## What was and was not verified
 
 Evidence = GitHub Actions runs of `desktop-windows.yml` on `windows-latest` (a standard runner, headless, Windows
-Server image), from the branch `feat/m5-windows-packaging`, 2026-10-29. Runs: 40805536068 (second-instance checks failed,
-vacuous refusal checks), 40808241772 (test-mode tracing added, unit tests made blocking and exposed Windows-incorrect test
-fixtures), 40811392955 (probes: single-argument launches work on the installed app), **40813630518 (final)**. The
-temporary `push:` trigger used for these runs was removed again; the workflow runs on `workflow_dispatch`, `main` and tags.
+Server image), from the branch `feat/m5-windows-on-main` (this work replayed onto main's marker-gated test mode),
+2026-10-29: 40840134744 (cancelled before it started, superseded), 40840883624 (red: three of main's unit tests assumed
+POSIX: a FIFO, a `/ok/c.pdf` argv without an explicit platform, `0600` mode bits), **40845803115 (green, final)**.
+The temporary `push:` trigger used for these runs was removed again; the workflow runs on `workflow_dispatch`, `main`
+and tags. Earlier evidence from the pre-main branch (runs 40805536068 ... 40813630518) is superseded.
 
-**Proven by run 40813630518 on a real Windows runner**
-- Everything listed for 40805536068 still passes: installer/portable build, 7-Zip extraction gate, gate mutation test,
-  silent install and uninstall (files, HKCU uninstall entry, shortcuts, ProgID, `OpenWithProgids`, `.pdf` default untouched),
-  window loads `bento://app`, `crossOriginIsolated`, no external requests, no Node globals, `BENTO_*` ignored, the
-  launch-argument PDF arrives through the grant bridge, renderer sandboxed at `untrusted` integrity, `/no-sandbox` exits 2.
-- **Installed app, second instance (single-argument launches, which is what the registered `"%1"` command produces):**
-  each launch exits 0 after `lock denied`, and each one provably reached the first instance (a `second-instance` event is
-  in the event log, required by the harness as positive evidence): a backslash path with a space and a non-ASCII letter is
-  granted, a `file:///C:/...` URL is granted, a UNC path `\\127.0.0.1\c$\...` is delivered and NOT granted (refused), and
-  the argv Windows delivers (it contains `--allow-file-access-from-files` injected by Electron, nothing else) is not
-  rejected by the switch policy. 21/21 checks of the installed smoke passed.
-- Unit tests that run on Windows (`open-file`, `argv-policy`, `ipc`, `security`, `static-files`, `transport-http`,
-  `normalise-modes` plus `windows`, `brand`, `headers`) pass: 50 pass, 0 fail, 3 skipped (stated POSIX-only reasons: named
-  pipes/`/dev/zero`, a FIFO in `validateOpenPath`, unix permission bits in `normaliseModes`). The step is blocking.
+**Proven by run 40845803115 on a real Windows runner**
+- Build of the NSIS installer and portable exe; the Windows gate passes on both (7-Zip extraction) and on
+  `win-unpacked`; inside every gate run `tools/check-asar-policy.js` ran the packaged win32 marker branch against real
+  NTFS files (valid accepted; extra bytes, other token, hard link, file symlink, directory, junctioned resources refused)
+  and against a fake fs, and the argv policy. Gate mutation test: 52 caught, 0 missed, 1 skipped (symlink creation in Git Bash).
+- Silent per-user install and uninstall: files, HKCU uninstall entry, shortcuts (no sandbox/devtools arguments), ProgID,
+  `OpenWithProgids`, `.pdf` default untouched; uninstall leaves no files, keys or shortcuts.
+- **Marker-gated test mode on the installed copy:** without the marker the test switches are refused (exit 2, no debug
+  port); with the marker written into the disposable installed copy the app enters test mode (hidden window); the marker
+  is removed again and asserted absent before the uninstall assertions.
+- Installed app in test mode (24/24 checks): `bento://app` loads, `crossOriginIsolated`, no external requests, no Node
+  globals, tool page has no shell bridge, `BENTO_*` ignored, renderer `sandboxed: true` at `untrusted` integrity, the
+  launch-argument PDF opens as a document tab of the shell, the shell UI is served from the asar (129 tools); second
+  instance (single-argument launches, as the registered `"%1"` produces), each with positive evidence in the event log:
+  a backslash path with a space and non-ASCII and a `file:///C:/...` URL become document tabs, a UNC path
+  `\\127.0.0.1\c$\...` is delivered and refused, Windows' injected argv passes the switch policy; `/no-sandbox` exits 2.
+- Portable exe without test mode: test switches refused (exit 2), `/no-sandbox` refused (exit 2), no registry/shortcut traces.
+- Unit tests on Windows: 131 pass, 0 fail, 18 skipped with stated reasons (POSIX-only FIFOs, mode bits and the POSIX
+  marker branch); the real-file win32 marker test ran and passed. `windows`, `brand`, `headers`: 69 pass. Lint passes.
 
 **Failing / not proven**
-- **Portable exe: second-instance forwarding does NOT work (FAIL in the smoke).** A second `portable.exe` launch never exits
-  within 30 s and never reaches `main.js`. Process listing while stuck: the first stub has the running app as a child from
-  its extraction directory under `%TEMP%`; the second stub is running and has no child. So the second stub itself hangs
-  before starting an app, probably while extracting into/over the locked directory or waiting on something (cause NOT
-  determined; hidden modal dialog not verified). Opening a PDF by launching the portable exe once is proven. A user
-  double-clicking a PDF with the portable build while it is running would not be forwarded. Possible next probes: the
-  electron-builder `portable` `unpackDirName` / `requestExecutionLevel` options and the stub's behaviour.
+- **Portable exe, second instance (issue #11): NOT VERIFIED, KNOWN FAILURE.** The pre-main branch measured that a second
+  `portable.exe` launch hangs before starting an app. The portable stub runs `RMDir /r` on its extraction directory at
+  every launch (portable.nsi), which plausibly explains it (NOT verified) and also means no test-mode marker can be
+  placed, so it cannot be exercised now. The workflow runs it as its own `continue-on-error` step and the summary lists it.
+- **Portable exe in test mode: NOT VERIFIED** (page isolation, sandbox level, open-with): proven on the installed app
+  only, which ships the same payload (both pass the gate by extraction).
 - **Multi-argument launches can crash the installed app before JavaScript runs:** `[file URL, UNC path]` and
   `[path with space, file URL, UNC path]` exit with code 4294967295, no trace file and no Chromium log (measured, reproducible
   in this run and the previous ones); `[space, URL]` and `[space, UNC]` are fine, and every single argument is fine. Cause
@@ -256,8 +261,11 @@ temporary `push:` trigger used for these runs was removed again; the workflow ru
 - NTFS specifics (8.3 names, streams, mapped drives, 64-bit file index precision in `dev`/`ino`) are covered by lexical unit
   tests only. On Windows a symlink swapped in after a grant is refused by the dev/ino identity check, not by `ELOOP`.
 - Licences of what the Windows packages add (NSIS, its plugins, Microsoft DLLs inside Electron) were not reviewed; see NOTICE.
-- The existing Linux `packaging/test-verify-artifact.sh` fails its positive control on this dev host ("missing or empty:
-  resources/LICENSE" on the AppImage tree) both with and without these changes; not investigated.
+- Multi-argument second-instance launches were not re-measured on this run beyond the INFO lines in the smoke log.
+- The win32 marker check's reliance on install-directory ACLs (no owner/mode check) is a design statement, not tested.
+- Linux side (dev host): `packaging/test-verify-artifact.sh --appimage-only` aborts silently when `desktop/release/` is
+  absent (`newest()` under `set -euo pipefail`; a bug on main, not fixed here); with explicit
+  `--deb /dev/null --rpm /dev/null --appimage <rebuilt AppImage>` it passes 78/0, and the Linux packaged smoke passes 18/18.
 
 **Earlier false root-cause hypotheses (ruled out by evidence):** wrong `--user-data-dir` (same dir was used and worked),
 handler registered late (single-argument launches arrive), early abort in our policy (traces show it passes). The first
