@@ -37,7 +37,7 @@ test('readRegularFile reads a regular file and refuses oversize files', async ()
   await assert.rejects(readRegularFile(p, 5), /too large/);
 });
 
-test('readRegularFile rejects FIFOs and device files without hanging', async () => {
+test('readRegularFile rejects FIFOs and device files without hanging', { skip: process.platform === 'win32' && 'POSIX-only: mkfifo and /dev/zero do not exist on Windows' }, async () => {
   const fifo = path.join(tmp, 'pipe');
   execFileSync('mkfifo', [fifo]);
   await assert.rejects(readRegularFile(fifo), /not a regular file/);

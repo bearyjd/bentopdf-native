@@ -43,3 +43,21 @@ test('render escapes substituted values for XML templates and rejects unknown to
   assert.equal(render('<name>@PRODUCT_NAME@</name>', { xml: true }), `<name>${brand.productName}</name>`);
   assert.throws(() => render('@NOPE@'), /unknown template token/);
 });
+
+test('windows builder config derives from brand.json and the Linux config, with no sandbox-off flags or signing material', () => {
+  const win = require('../electron-builder.win.config');
+  assert.equal(win.appId, brand.appId);
+  assert.equal(win.productName, brand.productName);
+  assert.equal(win.win.icon, brand.iconIco);
+  assert.deepEqual(win.win.target.map((t) => `${t.target}:${t.arch}`), ['nsis:x64', 'portable:x64']);
+  assert.equal(win.electronDist, undefined, 'the Linux Electron must not be used for the Windows build');
+  assert.equal(win.linux, undefined);
+  assert.equal(win.afterPack, config.afterPack);
+  assert.equal(win.nsis.oneClick, false);
+  assert.equal(win.nsis.perMachine, false);
+  assert.equal(win.nsis.allowToChangeInstallationDirectory, true);
+  assert.equal(win.fileAssociations, undefined, 'the .pdf association is registered by packaging/windows/installer.nsh, which does not take over the default');
+  assert.notEqual(win.nsis.artifactName, win.portable.artifactName);
+  assert.doesNotMatch(JSON.stringify(win), /no-sandbox|disable-setuid|certificateFile|CSC_|\.pfx|\.p12/);
+  assert.ok(require('node:fs').existsSync(require('node:path').resolve(__dirname, '..', brand.iconIco)));
+});

@@ -2,7 +2,7 @@
 
 // Usage: node tools/check-asar-policy.js <dir-of-extracted-app.asar>
 // Release-gate helper (packaging/verify-artifact.sh). Two checks on the code that shipped:
-//   1. process.env is read only on four exact, known lines (found by parsing, so comments never count and a read
+//   1. process.env is read only on five exact, known lines (found by parsing, so comments never count and a read
 //      appended to a known line is a different line text and fails).
 //   2. The packaged src/test-mode.js and src/argv-policy.js BEHAVE as designed: run, not grepped. A marker
 //      function that returns true, or an argv policy that ignores the marker, fails here.
@@ -21,6 +21,7 @@ const espree = require('espree');
 const EXEMPT = new Map([
   ['main.js|const sandboxOff = SANDBOX_OFF_ENV.filter((name) => process.env[name]);', 1],
   ['main.js|const overrides = app.isPackaged ? {} : process.env;', 1],
+  ['main.js|const testEnv = testHeadless(process.env) && (!policyOptions.packaged || policyOptions.testMarker === true) ? process.env : null;', 1],
   ['main.js|const refused = unsafeSwitches(process.argv, process.env, policyOptions);', 1],
   ['main.js|const unsafe = unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true });', 1],
 ]);

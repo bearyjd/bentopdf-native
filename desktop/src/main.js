@@ -12,6 +12,7 @@ if (sandboxOff.length > 0) {
   process.exit(2);
 }
 
+const fs = require('node:fs');
 const path = require('node:path');
 const { dialog, Menu, shell } = require('electron');
 const { prepare, startApp, TRANSPORTS, log } = require('./app');
@@ -19,7 +20,7 @@ const brand = require('../brand.json');
 const { aboutDetail, buildMenuTemplate, SOURCE_URL } = require('./menu');
 const { startShell } = require('./shell/shell-app');
 const { buildShellMenuTemplate } = require('./shell/shell-menu');
-const { unsafeSwitches } = require('./argv-policy');
+const { testHeadless, testTraceDir, unsafeSwitches } = require('./argv-policy');
 const { pdfPathsFromArgv } = require('./open-file');
 const { hasTestMarker } = require('./test-mode');
 const { createLimitedLogger, sanitizeText } = require('./shell/bounded');
@@ -56,6 +57,45 @@ const showAbout = () =>
   }).then(({ response }) => (response === 1 ? shell.openExternal(SOURCE_URL) : undefined));
 const openSource = () => shell.openExternal(SOURCE_URL);
 
+// Test mode in a packaged build needs the environment AND the marker file (src/test-mode.js). Every
+// test-only behaviour below (hidden window, event log, trace, sandbox report) keys off `testMode`,
+// never off the environment alone.
+const policyOptions = { packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath) };
+// The environment is handed on only in test mode: one guarded read (tools/check-asar-policy.js lists it).
+const testEnv = testHeadless(process.env) && (!policyOptions.packaged || policyOptions.testMarker === true) ? process.env : null;
+const testMode = testEnv !== null;
+
+// Test mode only: OS-level sandbox state of every Chromium process (Electron's
+// ProcessMetric.sandboxed / integrityLevel are reported on Windows and macOS), written next to the
+// profile and to stderr so the packaged smoke test can read it even when the launcher swallows stderr.
+function logProcessSandbox() {
+  const processes = app.getAppMetrics().map(({ type, sandboxed, integrityLevel }) => ({ type, sandboxed, integrityLevel }));
+  const json = JSON.stringify(processes);
+  process.stderr.write(`[bento-test] process-sandbox ${json}\n`);
+  fs.writeFileSync(path.join(app.getPath('userData'), 'bento-test-sandbox.json'), json);
+}
+
+// Test mode only: append-and-flush events next to the profile. stderr from a process that exits right
+// after writing can be lost on Windows pipes, and the second-instance smoke needs both sides' events.
+function testLog(message) {
+  if (!testMode) return;
+  fs.appendFileSync(path.join(app.getPath('userData'), 'bento-test-events.log'), `${process.pid} ${message}\n`);
+}
+
+// Test mode only, and only when the harness names a directory: one trace file per process, flushed on
+// every line, so a process that dies early (the second instance) still leaves evidence behind.
+function trace(message) {
+  const dir = testMode ? testTraceDir(testEnv) : undefined;
+  if (!dir) return;
+  try {
+    fs.appendFileSync(path.join(dir, `trace-${process.pid}.log`), `${Date.now()} ${message}\n`);
+  } catch (err) {
+    process.stderr.write(`[bento-test] trace failed: ${err.message}\n`);
+  }
+}
+trace(`start pid=${process.pid} ppid=${process.ppid} exec=${process.execPath} argv=${JSON.stringify(process.argv)} userData=${app.getPath('userData')}`);
+process.on('exit', (code) => trace(`process exit code=${code}`));
+
 function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ showAbout, openSource, devtools: !app.isPackaged })));
 }
@@ -70,21 +110,23 @@ function installShellMenu(menuActions, recents) {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// Test mode in a packaged build needs the environment AND the marker file (src/test-mode.js).
-const policyOptions = { packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath) };
 // Switch text comes from whoever started us (or, for a second launch, any local process): bounded, one line, rate limited.
 const logLimited = createLimitedLogger(log);
 const refused = unsafeSwitches(process.argv, process.env, policyOptions);
+trace(`unsafeSwitches=${JSON.stringify(refused)}`);
 if (refused.length > 0) {
   process.stderr.write(`[bento] refusing to start with unsafe switch(es): ${sanitizeText(refused.join(' '))}\n`);
   app.exit(2);
 } else if (!TRANSPORTS.includes(transport)) {
   process.stderr.write(`BENTO_TRANSPORT must be one of ${TRANSPORTS.join(', ')}\n`);
   app.exit(2);
-} else if (!app.requestSingleInstanceLock()) {
+} else if (!(trace('requesting single-instance lock'), app.requestSingleInstanceLock())) {
+  trace('lock DENIED (this is the second instance)');
   log('another instance is already running; exiting');
+  testLog('lock denied: this is the second instance, exiting');
   app.quit();
 } else {
+  trace('lock GRANTED (this is the first instance)');
   let handle = null;
   const waiting = []; // paths received before the window exists
 
@@ -95,18 +137,24 @@ if (refused.length > 0) {
         waiting.push(filePath);
         continue;
       }
-      handle.openPath(filePath).catch((err) => log(`refused to open ${path.basename(filePath)}: ${err.message}`));
+      handle.openPath(filePath).then(
+        () => testLog(`granted ${path.basename(filePath)}`),
+        (err) => { log(`refused to open ${path.basename(filePath)}: ${err.message}`); testLog(`refused ${path.basename(filePath)}: ${err.message}`); }
+      );
     }
   };
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
+    trace(`second-instance event argv=${JSON.stringify(argv)} cwd=${workingDirectory}`);
+    testLog(`second-instance argv=${JSON.stringify(argv)} cwd=${workingDirectory}`);
     const unsafe = unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true });
     if (unsafe.length > 0) {
       logLimited('second-instance', `ignored a second launch with unsafe switch(es): ${sanitizeText(unsafe.join(' '))}`);
+      testLog(`ignored second launch: ${sanitizeText(unsafe.join(' '))}`);
       return;
     }
     const win = handle && handle.window;
-    if (win && !win.isDestroyed()) {
+    if (win && !win.isDestroyed() && !testMode) {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
@@ -123,18 +171,22 @@ if (refused.length > 0) {
   app
     .whenReady()
     .then(async () => {
+      // Test mode (see above): the window is created hidden and never shown, so CI runners see nothing on
+      // screen. Production launches never have it.
+      const show = !testMode;
       if (startKindFor(transport) === 'shell') {
         let menuActions = null;
         const onStateChanged = (state) => menuActions && installShellMenu(menuActions, state.recents);
-        const started = await startShell({ distDir, homeTab: waiting.length === 0, onStateChanged });
+        const started = await startShell({ distDir, show, homeTab: waiting.length === 0, onStateChanged });
         menuActions = started.menuActions;
         installShellMenu(menuActions, started.recents.list());
         handle = started;
       } else {
         log('BENTO_TRANSPORT=http: TEST-ONLY single-window harness, not the tabbed shell');
         installMenu();
-        handle = await startApp({ distDir, transport });
+        handle = await startApp({ distDir, transport, show });
       }
+      if (testMode) logProcessSandbox();
       openPaths(waiting.splice(0));
     })
     .catch((err) => die('Failed to start', err));

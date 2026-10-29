@@ -25,7 +25,7 @@ before(() => {
   fs.symlinkSync(path.join(tmp, 'secret.txt'), path.join(root, 'link-out.txt'));
   fs.symlinkSync(tmp, path.join(root, 'dir-out'));
   fs.symlinkSync(path.join(root, 'data.bin'), path.join(root, 'link-in.bin'));
-  root = fs.realpathSync(root);
+  root = fs.realpathSync.native(root); // same call as app.js: the JS realpath keeps 8.3 names (RUNNER~1) on Windows
 });
 
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
