@@ -7,11 +7,13 @@
 // (or WIN_CSC_*) are present in the environment, or when all AZURE_* variables below are set.
 const brand = require('./brand.json');
 const base = require('./electron-builder.config');
+const { flavourOf, nameTag } = require('./tools/flavour');
 
 // eslint-disable-next-line no-unused-vars
 const { electronDist, linux, appImage, deb, rpm, artifactName, extraMetadata, ...shared } = base;
 
-const name = brand.executableName;
+// A smoke build (BENTO_FLAVOUR=smoke) refuses to run with signing material in the environment (tools/flavour.js).
+const name = `${brand.executableName}${nameTag(flavourOf())}`;
 const azure = ['AZURE_SIGN_ENDPOINT', 'AZURE_SIGN_ACCOUNT', 'AZURE_SIGN_PROFILE', 'AZURE_SIGN_PUBLISHER'];
 const azureSignOptions = azure.every((key) => process.env[key])
   ? {

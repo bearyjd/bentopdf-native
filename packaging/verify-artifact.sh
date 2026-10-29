@@ -7,6 +7,8 @@
 #   packaging/verify-artifact.sh [options] --tree <extracted-dir> --kind <appimage|deb|rpm|flatpak> [--scripts <dir>]
 #
 # Options:
+#   --flavour F          release (default) or smoke: which build flavour the artifact must be (issue #13). A smoke
+#                        artifact carries test mode and is never distributed; --release with --flavour smoke fails.
 #   --release            also require: clean tree, a release tag in SOURCE.txt, zero unresolved markers in NOTICE (packaging/check-notice.sh)
 #   --allow-dirty        accept SOURCE.txt saying dirty=yes (local experiments only)
 #   --expect-commit SHA  commit SOURCE.txt must name (default: git HEAD of this checkout)
@@ -26,10 +28,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok:   $*"; }
 
-RELEASE=0 ALLOW_DIRTY=0 EXPECT_COMMIT="" TREE="" KIND="" SCRIPTS_ARG="" ART_ARG=""
+FLAVOUR=release RELEASE=0 ALLOW_DIRTY=0 EXPECT_COMMIT="" TREE="" KIND="" SCRIPTS_ARG="" ART_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --release) RELEASE=1 ;;
+    --flavour) FLAVOUR="${2:?--flavour needs release or smoke}"; shift ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --expect-commit) EXPECT_COMMIT="${2:?--expect-commit needs a SHA}"; shift ;;
     --tree) TREE="${2:?--tree needs a directory}"; shift ;;
@@ -40,6 +43,8 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+case "$FLAVOUR" in release|smoke) ;; *) fail "--flavour must be release or smoke (got '$FLAVOUR')" ;; esac
+[ "$FLAVOUR" = release ] || [ "$RELEASE" = 0 ] || fail "--release with --flavour smoke: a smoke artifact is never a release"
 
 brand() { node -p "require('$ROOT/desktop/brand.json').$1"; }
 EXE_NAME="$(brand executableName)"
@@ -151,11 +156,11 @@ ASAR="$ROOT/desktop/node_modules/.bin/asar"
 for f in src/main.js src/menu.js src/argv-policy.js src/test-mode.js src/open-file.js brand.json; do
   [ -s "$WORK/asar/$f" ] || fail "app.asar lacks $f"
 done
-grep -q 'app.isPackaged ? {} : process.env' "$WORK/asar/src/main.js" || fail "main.js does not gate BENTO_* overrides on app.isPackaged"
+grep -qF "const overrides = app.isPackaged || flavour === 'release' ? {} : process.env;" "$WORK/asar/src/main.js" || fail "main.js does not gate BENTO_* overrides on app.isPackaged and the release flavour"
 # process.env: parsed, not grepped. Comments never count; the five known lines must match exactly, so a read
 # appended to one of them fails. The same helper RUNS the packaged marker logic and argv policy (see below).
-node "$ROOT/desktop/tools/check-asar-policy.js" "$WORK/asar" || fail "process.env is read outside the known guarded lines, or the packaged marker logic / argv policy misbehaves"
-pass "BENTO_* overrides are read only through the app.isPackaged guard; packaged marker logic and argv policy behave as designed"
+node "$ROOT/desktop/tools/check-asar-policy.js" --flavour "$FLAVOUR" "$WORK/asar" || fail "build flavour is not $FLAVOUR, process.env is read outside the known guarded lines, or the packaged marker logic / argv policy misbehaves"
+pass "$FLAVOUR flavour; BENTO_* overrides are read only through the app.isPackaged guard; packaged marker logic and argv policy behave as designed"
 
 grep -q "'ELECTRON_DISABLE_SANDBOX'" "$WORK/asar/src/main.js" && grep -q "'CHROME_DEVEL_SANDBOX'" "$WORK/asar/src/main.js" || fail "main.js does not refuse to start when ELECTRON_DISABLE_SANDBOX / CHROME_DEVEL_SANDBOX is set"
 grep -q 'app.exit(2)' "$WORK/asar/src/main.js" || fail "main.js has no exit-2 refusal"
@@ -163,14 +168,18 @@ grep -q "require('./argv-policy')" "$WORK/asar/src/main.js" || fail "main.js doe
 grep -qF 'unsafeSwitches(process.argv, process.env, policyOptions)' "$WORK/asar/src/main.js" || fail "main.js does not check its own argv"
 grep -qF 'unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true })' "$WORK/asar/src/main.js" || fail "main.js does not check second-instance argv"
 grep -qF 'packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath)' "$WORK/asar/src/main.js" || fail "main.js does not gate packaged test mode on the marker file"
-# The marker logic itself, as text (the helper above also runs it): each control must still be spelled out in test-mode.js,
-# the argv policy must require the marker for packaged builds, and main.js must feed it the marker result.
-for needle in 'fsImpl.constants.O_NOFOLLOW' 'fsImpl.fstatSync(fd)' '!st.isFile()' 'st.nlink !== 1' 'st.uid !== uid' '(st.mode & 0o022) !== 0' 'st.size !== MARKER_CONTENT.length' '=== MARKER_CONTENT' 'fsImpl.realpathSync(resourcesPath) !== path.resolve(resourcesPath)' "typeof uid !== 'number'"; do
-  grep -qF -- "$needle" "$WORK/asar/src/test-mode.js" || fail "test-mode.js lost the marker control: $needle"
-done
-grep -qF "const MARKER_CONTENT = 'bento-test-mode-v1\\n';" "$WORK/asar/src/test-mode.js" || fail "test-mode.js marker token changed"
+grep -qF 'const testEnv = testModeOn(process.env, policyOptions) ? process.env : null;' "$WORK/asar/src/main.js" || fail "main.js test-only behaviour is not gated on testModeOn (flavour, env and marker)"
 grep -qF "(!packaged || testMarker === true)" "$WORK/asar/src/argv-policy.js" || fail "argv-policy.js does not require testMarker === true for a packaged build"
-pass "test-mode.js carries every marker control (O_NOFOLLOW, fstat, regular file, nlink, owner, mode, size, token, realpath); argv policy requires testMarker === true"
+if [ "$FLAVOUR" = smoke ]; then
+  # The marker logic itself, as text (the helper above also runs it): each control must still be spelled out in test-mode.js.
+  for needle in 'fsImpl.constants.O_NOFOLLOW' 'fsImpl.fstatSync(fd)' '!st.isFile()' 'st.nlink !== 1' 'st.uid !== uid' '(st.mode & 0o022) !== 0' 'st.size !== MARKER_CONTENT.length' '=== MARKER_CONTENT' 'fsImpl.realpathSync(resourcesPath) !== path.resolve(resourcesPath)' "typeof uid !== 'number'"; do
+    grep -qF -- "$needle" "$WORK/asar/src/test-mode.js" || fail "test-mode.js lost the marker control: $needle"
+  done
+  grep -qF "const MARKER_CONTENT = 'bento-test-mode-v1\\n';" "$WORK/asar/src/test-mode.js" || fail "test-mode.js marker token changed"
+  pass "smoke: test-mode.js carries every marker control (O_NOFOLLOW, fstat, regular file, nlink, owner, mode, size, token, realpath); argv policy requires testMarker === true"
+else
+  pass "release: test-mode.js is the stub (no marker logic, no test switch); test mode is off by flavour in argv-policy.js and main.js"
+fi
 grep -q '%PDF-' "$WORK/asar/src/open-file.js" || fail "open-file.js does not check the %PDF- header"
 grep -q 'realpath' "$WORK/asar/src/open-file.js" || fail "open-file.js does not resolve symlinks"
 pass "argv policy (own and second-instance argv) and open-with header/symlink checks are present"

@@ -113,7 +113,7 @@ m_no_asar() { rm "$1/resources/app.asar"; }
 m_big_asar() { head -c 6000000 /dev/zero >> "$1/resources/app.asar"; }
 m_no_bundle() { rm "$1/resources/dist/index.html"; }
 m_no_bundle_source() { rm "$1/resources/dist/SOURCE.txt"; }
-m_override_honoured() { edit_asar "$1" 's/app.isPackaged ? {} : process.env/process.env \/\/ MUTATED/' src/main.js; }
+m_override_honoured() { edit_asar "$1" "s/app.isPackaged || flavour === 'release' ? {} : process.env/process.env \/\/ MUTATED/" src/main.js; }
 m_sandbox_env_not_refused() { edit_asar "$1" "s/'CHROME_DEVEL_SANDBOX'/'CHROME_DEVEL_SANDBOX_MUTATED'/" src/main.js; }
 m_no_sandbox_in_code() { edit_asar "$1" 's/^.use strict.;/"use strict"; \/\/ MUTATED --no-sandbox/' src/menu.js; }
 m_window_always_shown() { edit_asar "$1" 's/const show = !testMode;/const show = true; \/\/ MUTATED/' src/main.js; }

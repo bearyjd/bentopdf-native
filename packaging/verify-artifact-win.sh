@@ -8,6 +8,8 @@
 #   packaging/verify-artifact-win.sh [options] --tree <dir> --kind <installer|portable|installed|unpacked>
 #
 # Options:
+#   --flavour F          release (default) or smoke: which build flavour the artifact must be (issue #13). A smoke
+#                        artifact carries test mode and is never distributed; --release with --flavour smoke fails.
 #   --release            also require: release tag in SOURCE.txt, Electron zip sha256, zero unresolved NOTICE lines
 #   --allow-dirty        accept SOURCE.txt saying dirty=yes (local experiments only)
 #   --expect-commit SHA  commit SOURCE.txt must name (default: git HEAD of this checkout)
@@ -25,10 +27,11 @@ pass() { echo "ok:   $*"; }
 # Paths handed to native Windows programs (node, 7z) must be Windows paths under Git Bash.
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 
-RELEASE=0 ALLOW_DIRTY=0 EXPECT_COMMIT="" TREE="" KIND="" CONFIG_ARG="" ART_ARG=""
+FLAVOUR=release RELEASE=0 ALLOW_DIRTY=0 EXPECT_COMMIT="" TREE="" KIND="" CONFIG_ARG="" ART_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --release) RELEASE=1 ;;
+    --flavour) FLAVOUR="${2:?--flavour needs release or smoke}"; shift ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --expect-commit) EXPECT_COMMIT="${2:?--expect-commit needs a SHA}"; shift ;;
     --tree) TREE="${2:?--tree needs a directory}"; shift ;;
@@ -39,6 +42,8 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+case "$FLAVOUR" in release|smoke) ;; *) fail "--flavour must be release or smoke (got '$FLAVOUR')" ;; esac
+[ "$FLAVOUR" = release ] || [ "$RELEASE" = 0 ] || fail "--release with --flavour smoke: a smoke artifact is never a release"
 
 BRAND_JSON="$(native "$ROOT/desktop/brand.json")"
 brand() { node -p "require(process.argv[1]).$1" "$BRAND_JSON"; }
@@ -145,29 +150,33 @@ for f in src/main.js src/menu.js src/argv-policy.js src/test-mode.js src/open-fi
 done
 M="$WORK/asar/src/main.js"
 T="$WORK/asar/src/test-mode.js"
-grep -q 'app.isPackaged ? {} : process.env' "$M" || fail "main.js does not gate BENTO_* overrides on app.isPackaged"
+grep -qF "const overrides = app.isPackaged || flavour === 'release' ? {} : process.env;" "$M" || fail "main.js does not gate BENTO_* overrides on app.isPackaged and the release flavour"
 # process.env: parsed, not grepped (same helper and exempt lines as the Linux gate). It also RUNS the packaged marker
 # logic and argv policy: on windows-latest the win32 branch against real NTFS files, on every host against a fake fs.
-node "$(native "$ROOT/desktop/tools/check-asar-policy.js")" "$(native "$WORK/asar")" || fail "process.env is read outside the known guarded lines, or the packaged marker logic / argv policy misbehaves"
-pass "BENTO_* overrides are read only through the app.isPackaged guard; packaged marker logic and argv policy behave as designed"
+node "$(native "$ROOT/desktop/tools/check-asar-policy.js")" --flavour "$FLAVOUR" "$(native "$WORK/asar")" || fail "build flavour is not $FLAVOUR, process.env is read outside the known guarded lines, or the packaged marker logic / argv policy misbehaves"
+pass "$FLAVOUR flavour; BENTO_* overrides are read only through the app.isPackaged guard; packaged marker logic and argv policy behave as designed"
 
 grep -q "'ELECTRON_DISABLE_SANDBOX'" "$M" && grep -q "'CHROME_DEVEL_SANDBOX'" "$M" || fail "main.js does not refuse to start when ELECTRON_DISABLE_SANDBOX / CHROME_DEVEL_SANDBOX is set"
 grep -q 'app.exit(2)' "$M" || fail "main.js has no exit-2 refusal"
 grep -qF 'unsafeSwitches(process.argv, process.env, policyOptions)' "$M" || fail "main.js does not check its own argv"
 grep -qF 'unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true })' "$M" || fail "main.js does not check second-instance argv"
 grep -qF 'packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath)' "$M" || fail "main.js does not gate packaged test mode on the marker file"
-grep -qF '(!policyOptions.packaged || policyOptions.testMarker === true) ? process.env : null' "$M" || fail "main.js test-only behaviour is not gated on the marker"
+grep -qF 'const testEnv = testModeOn(process.env, policyOptions) ? process.env : null;' "$M" || fail "main.js test-only behaviour is not gated on testModeOn (flavour, env and marker)"
 grep -qF 'const show = !testMode;' "$M" || fail "main.js does not hide the window in test mode (const show = !testMode;)"
 grep -qF "(!packaged || testMarker === true)" "$WORK/asar/src/argv-policy.js" || fail "argv-policy.js does not require testMarker === true for a packaged build"
-# The win32 marker controls as text (the helper above also runs them): removing one must fail here too.
-for needle in "if (platform === 'win32') return hasTestMarkerWin32(resourcesPath, fsImpl);" \
-  'fsImpl.realpathSync.native(resourcesPath)' 'sameWin32Path(res, P.resolve(resourcesPath))' 'const marker = P.join(res, MARKER_NAME);' \
-  'lst.isSymbolicLink() || !lst.isFile()' 'sameWin32Path(fsImpl.realpathSync.native(marker), marker)' \
-  'st.dev !== lst.dev || st.ino !== lst.ino' 'Number(st.nlink) !== 1 || Number(st.size) !== MARKER_CONTENT.length' "=== MARKER_CONTENT;"; do
-  grep -qF -- "$needle" "$T" || fail "test-mode.js lost the win32 marker control: $needle"
-done
-grep -qF "const MARKER_CONTENT = 'bento-test-mode-v1\\n';" "$T" || fail "test-mode.js marker token changed"
-pass "test mode needs env AND marker; win32 marker controls (native realpath, lstat not-a-link, reparse check, dev/ino, nlink, size, token) present; window hidden only in test mode"
+if [ "$FLAVOUR" = smoke ]; then
+  # The win32 marker controls as text (the helper above also runs them): removing one must fail here too.
+  for needle in "if (platform === 'win32') return hasTestMarkerWin32(resourcesPath, fsImpl);" \
+    'fsImpl.realpathSync.native(resourcesPath)' 'sameWin32Path(res, P.resolve(resourcesPath))' 'const marker = P.join(res, MARKER_NAME);' \
+    'lst.isSymbolicLink() || !lst.isFile()' 'sameWin32Path(fsImpl.realpathSync.native(marker), marker)' \
+    'st.dev !== lst.dev || st.ino !== lst.ino' 'Number(st.nlink) !== 1 || Number(st.size) !== MARKER_CONTENT.length' "=== MARKER_CONTENT;"; do
+    grep -qF -- "$needle" "$T" || fail "test-mode.js lost the win32 marker control: $needle"
+  done
+  grep -qF "const MARKER_CONTENT = 'bento-test-mode-v1\\n';" "$T" || fail "test-mode.js marker token changed"
+  pass "smoke: test mode needs env AND marker; win32 marker controls (native realpath, lstat not-a-link, reparse check, dev/ino, nlink, size, token) present; window hidden only in test mode"
+else
+  pass "release: test-mode.js is the stub (no marker logic, no test switch); test mode is off by flavour; window hidden only in test mode"
+fi
 grep -q "platform === 'win32' && arg.startsWith('/')" "$WORK/asar/src/argv-policy.js" || fail "argv-policy.js does not treat /switch as a switch on win32"
 grep -q 'windowsPathProblem' "$WORK/asar/src/open-file.js" || fail "open-file.js lacks the Windows path rules (UNC, streams, device names)"
 grep -q 'isWindowsUnsafeSegment' "$WORK/asar/src/static-files.js" || fail "static-files.js lacks the Windows path-segment rules"

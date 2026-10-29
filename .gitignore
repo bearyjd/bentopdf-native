@@ -24,5 +24,6 @@ keystore.properties
 
 # Packaging outputs
 desktop/release/
+desktop/release-smoke/
 packaging/generated/
 packaging/flatpak/.build/

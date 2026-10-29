@@ -228,11 +228,11 @@ m_main_marker_constant() { asar_edit "$1" src/main.js 's/testMarker: app\.isPack
 m_env_in_line_comment() { asar_edit "$1" src/argv-policy.js '1a // process.env is mentioned here only in a comment'; }
 m_env_in_block_comment() { asar_edit "$1" src/menu.js '1a /* process.env, process.env.HOME: still only a comment */'; }
 m_env_on_exempt_line() { asar_edit "$1" src/main.js 's/^(const refused = unsafeSwitches\(process\.argv, process\.env, policyOptions\);)$/\1 const leak = process.env.HOME;/'; }
-m_env_on_exempt_line2() { asar_edit "$1" src/main.js 's/^(const overrides = app\.isPackaged \? \{\} : process\.env;)$/\1 const leak = process["env"].HOME;/'; }
+m_env_on_exempt_line2() { asar_edit "$1" src/main.js 's/^(const overrides = app\.isPackaged \|\| flavour === .release. \? \{\} : process\.env;)$/\1 const leak = process["env"].HOME;/'; }
 m_env_globalthis() { asar_edit "$1" src/menu.js '1a const leak = globalThis.process.env.HOME;'; }
 m_env_global() { asar_edit "$1" src/menu.js '1a const leak = global.process.env.HOME;'; }
 m_env_destructured() { asar_edit "$1" src/menu.js '1a const { env } = process;'; }
-m_env_override() { asar_edit "$1" src/main.js 's/app\.isPackaged \? \{\} : process\.env/process.env/'; }
+m_env_override() { asar_edit "$1" src/main.js 's/app\.isPackaged \|\| flavour === .release. \? \{\} : process\.env/process.env/'; }
 m_env_elsewhere() { asar_edit "$1" src/app.js '1a const leak = process.env.HOME;'; }
 m_argv_policy_gone() { asar_edit "$1" src/main.js 's/unsafeSwitches\(process\.argv, process\.env, policyOptions\)/[]/'; }
 m_argv_second_gone() { asar_edit "$1" src/main.js 's/unsafeSwitches\(argv, process\.env, \{ \.\.\.policyOptions, secondInstance: true \}\)/[]/'; }

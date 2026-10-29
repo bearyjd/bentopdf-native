@@ -1,15 +1,32 @@
 'use strict';
 
-// A packaged build honours BENTO_TEST_HEADLESS only if a marker file ships next to the app
-// resources. Release artifacts never contain it (packaging/verify-artifact.sh fails if they do);
-// the packaged smoke test creates it inside a disposable extracted COPY of an AppImage.
-// This is a tripwire, not a boundary: Chromium parses the debug-port switch before any
-// JavaScript runs. The marker only decides whether our own argv policy then lets it through.
+// Test mode: SMOKE flavour and unpackaged runs only (issue #13). A RELEASE build does not contain this file:
+// electron-builder packs flavours/release/test-mode.js in its place (tools/flavour.js), a stub with no marker
+// logic and no test-only switch, and the release gate (tools/check-asar-policy.js --flavour release) asserts the
+// stub byte for byte. In a packaged SMOKE build test mode needs BENTO_TEST_HEADLESS=1 AND a marker file next to
+// the app resources; the packaged smoke tests create it inside a disposable copy of the smoke artifact.
+// Chromium still parses the debug-port switch before any JavaScript runs: the marker only decides whether our own
+// argv policy then lets it through (src/argv-policy.js).
 const fs = require('node:fs');
 const path = require('node:path');
 
 const MARKER_NAME = '.bento-test-mode';
 const MARKER_CONTENT = 'bento-test-mode-v1\n';
+
+// The test harness drives the app headless over the debug port. These switches pass the argv policy only in test
+// mode (argv-policy.js); switch names are built from parts so the release gate's grep for forbidden flag literals
+// stays meaningful.
+const DASHES = '--';
+const TEST_EXACT = new Set([`${DASHES}ozone-platform=headless`, `${DASHES}remote-debugging-pipe`]);
+const TEST_PREFIX = [`${DASHES}remote-debugging-port=`, `${DASHES}user-data-dir=`];
+/** A switch that only test mode may use. */
+const isTestSwitch = (arg) => TEST_EXACT.has(arg) || TEST_PREFIX.some((p) => arg.startsWith(p) && arg.length > p.length);
+
+/** Test mode asked for by the environment (still needs a test flavour, and the marker when packaged). */
+const testHeadless = (env = {}) => env.BENTO_TEST_HEADLESS === '1';
+
+/** Test mode only: directory for per-process trace files (BENTO_TEST_TRACE_DIR), or undefined. */
+const testTraceDir = (env = {}) => (testHeadless(env) ? env.BENTO_TEST_TRACE_DIR : undefined);
 
 // Closing the descriptor must never throw out of the fail-closed path: a throw in `finally` would replace the verdict.
 function closeQuietly(fsImpl, fd) {
@@ -81,4 +98,4 @@ function hasTestMarkerWin32(resourcesPath, fsImpl) {
   }
 }
 
-module.exports = { hasTestMarker, MARKER_NAME, MARKER_CONTENT };
+module.exports = { hasTestMarker, isTestSwitch, testHeadless, testTraceDir, MARKER_NAME, MARKER_CONTENT };

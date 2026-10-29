@@ -1,29 +1,63 @@
 'use strict';
 
-// Usage: node tools/check-asar-policy.js <dir-of-extracted-app.asar>
-// Release-gate helper (packaging/verify-artifact.sh). Two checks on the code that shipped:
+// Usage: node tools/check-asar-policy.js [--flavour release|smoke] <dir-of-extracted-app.asar>   (default: release)
+// Release-gate helper (packaging/verify-artifact.sh, verify-artifact-win.sh). Checks on the code that shipped:
+//   0. Build flavour (issue #13). src/build-flavour.js must be the requested flavour's file, byte for byte.
+//      release: src/test-mode.js must be the stub flavours/release/test-mode.js byte for byte, and no code token
+//      (comments do not count) anywhere under src/ may name a test-only switch, the marker or a test variable.
+//      smoke: src/test-mode.js must NOT be the stub (a smoke build without test mode tests nothing).
 //   1. process.env is read only on five exact, known lines (found by parsing, so comments never count and a read
 //      appended to a known line is a different line text and fails).
-//   2. The packaged src/test-mode.js and src/argv-policy.js BEHAVE as designed: run, not grepped. A marker
-//      function that returns true, or an argv policy that ignores the marker, fails here. Real files exercise the
-//      host's own branch (POSIX on Linux, win32 on windows-latest); the win32 branch also runs against a fake fs
-//      on every host.
+//   2. The packaged src/test-mode.js and src/argv-policy.js BEHAVE as designed: run, not grepped.
+//      release: no marker, environment or isPackaged value turns test mode on; every test switch is refused.
+//      smoke: a marker function that returns true, or an argv policy that ignores the marker, fails here. Real files
+//      exercise the host's own branch (POSIX on Linux, win32 on windows-latest); the win32 branch also runs against
+//      a fake fs on every host.
 // Exits non-zero on the first violated rule. Needs espree (a dependency of eslint) from desktop/node_modules.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const dir = process.argv[2];
-if (!dir) throw new Error('usage: check-asar-policy.js <extracted-asar-dir>');
-const src = path.resolve(dir, 'src');
 const fail = (msg) => { process.stderr.write(`FAIL: ${msg}\n`); process.exit(1); };
+const args = process.argv.slice(2);
+const FLAVOUR = args[0] === '--flavour' ? args[1] : 'release';
+const dir = args[0] === '--flavour' ? args[2] : args[0];
+if (!dir || !['release', 'smoke'].includes(FLAVOUR)) throw new Error('usage: check-asar-policy.js [--flavour release|smoke] <extracted-asar-dir>');
+const src = path.resolve(dir, 'src');
+const espree = require('espree');
+
+// ---- 0. build flavour ------------------------------------------------------------------------------------
+const FLAVOUR_DIR = path.join(__dirname, '..', 'flavours');
+const readOr = (file) => { try { return fs.readFileSync(file, 'utf8'); } catch { return null; } };
+const packed = (name) => readOr(path.join(src, name));
+if (packed('build-flavour.js') !== readOr(path.join(FLAVOUR_DIR, FLAVOUR, 'build-flavour.js'))) fail(`build flavour: src/build-flavour.js is not the ${FLAVOUR} flavour file (flavours/${FLAVOUR}/build-flavour.js)`);
+if (require(path.join(src, 'build-flavour.js')).flavour !== FLAVOUR) fail(`build flavour: src/build-flavour.js does not say ${FLAVOUR}`);
+// Both flavours: the argv policy keeps its own flavour rule (a second layer behind the stub).
+for (const needle of ["const TEST_FLAVOURS = new Set(['dev', 'smoke']);", 'return TEST_FLAVOURS.has(flavour) && testHeadless(env) && (!packaged || testMarker === true);']) {
+  if (!(packed('argv-policy.js') || '').includes(needle)) fail(`build flavour: argv-policy.js lost the flavour rule: ${needle}`);
+}
+const isStub = packed('test-mode.js') === readOr(path.join(FLAVOUR_DIR, 'release', 'test-mode.js'));
+// Code tokens that exist only for test mode. Comments are not tokens: argv-policy.js may still EXPLAIN the refusal.
+const TEST_TOKENS = ['remote-debugging', 'ozone-platform=headless', 'user-data-dir', 'bento-test-mode', 'BENTO_TEST_HEADLESS', 'BENTO_TEST_TRACE_DIR', 'hasTestMarkerWin32'];
+if (FLAVOUR === 'release') {
+  if (!isStub) fail('build flavour: release src/test-mode.js is not the release stub (flavours/release/test-mode.js)');
+  for (const f of fs.readdirSync(src, { recursive: true }).filter((x) => x.endsWith('.js'))) {
+    for (const t of espree.tokenize(fs.readFileSync(path.join(src, f), 'utf8'), { ecmaVersion: 'latest', loc: true })) {
+      const hit = TEST_TOKENS.find((needle) => t.value.includes(needle));
+      if (hit) fail(`build flavour: release src/${f} has test-only code (${hit} in ${t.type} token at line ${t.loc.start.line})`);
+    }
+  }
+  process.stdout.write('ok   release flavour: build-flavour.js says release, test-mode.js is the stub, no test-only token in src/\n');
+} else {
+  if (isStub) fail('build flavour: smoke src/test-mode.js is the release stub, so the smoke tests could not enter test mode');
+  process.stdout.write('ok   smoke flavour: build-flavour.js says smoke, test-mode.js carries the real marker logic\n');
+}
 
 // ---- 1. process.env reads --------------------------------------------------------------------------------
-const espree = require('espree');
 const EXEMPT = new Map([
   ['main.js|const sandboxOff = SANDBOX_OFF_ENV.filter((name) => process.env[name]);', 1],
-  ['main.js|const overrides = app.isPackaged ? {} : process.env;', 1],
-  ['main.js|const testEnv = testHeadless(process.env) && (!policyOptions.packaged || policyOptions.testMarker === true) ? process.env : null;', 1],
+  ["main.js|const overrides = app.isPackaged || flavour === 'release' ? {} : process.env;", 1],
+  ['main.js|const testEnv = testModeOn(process.env, policyOptions) ? process.env : null;', 1],
   ['main.js|const refused = unsafeSwitches(process.argv, process.env, policyOptions);', 1],
   ['main.js|const unsafe = unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true });', 1],
 ]);
@@ -62,6 +96,44 @@ for (const f of files) {
 process.stdout.write(`ok   process.env is read only on ${[...seen.values()].reduce((a, b) => a + b, 0)} known lines (comments ignored)\n`);
 
 // ---- 2. behaviour of the shipped marker logic and argv policy --------------------------------------------
+// Argv policy, both flavours: a leading "/" is a switch on win32 ONLY (rule dropped -> /no-sandbox slips through; rule widened -> POSIX paths refused).
+function argvPlatformChecks(unsafeSwitches, expect) {
+  expect('argv policy: /no-sandbox is refused on win32', unsafeSwitches(['exe', '/no-sandbox'], {}, { platform: 'win32' }).length, 1);
+  expect('argv policy: /remote-debugging-port=0 is refused on win32', unsafeSwitches(['exe', '/remote-debugging-port=0'], {}, { platform: 'win32' }).length, 1);
+  expect('argv policy: a POSIX path is not a switch on linux', unsafeSwitches(['exe', '/home/u/x.pdf'], {}, { platform: 'linux' }).length, 0);
+  expect('argv policy: a POSIX path is not a switch on darwin', unsafeSwitches(['exe', '/Users/u/x.pdf'], {}, { platform: 'darwin' }).length, 0);
+  expect('argv policy: a drive path is not a switch on win32', unsafeSwitches(['exe', 'C:\\u\\x.pdf', 'plain.pdf'], {}, { platform: 'win32' }).length, 0);
+  expect('argv policy: --no-sandbox is refused everywhere', unsafeSwitches(['exe', '--no-sandbox'], {}, { platform: 'linux' }).length, 1);
+}
+
+if (FLAVOUR === 'release') {
+  const { hasTestMarker } = require(path.join(src, 'test-mode.js'));
+  const { unsafeSwitches, testModeOn } = require(path.join(src, 'argv-policy.js'));
+  const { MARKER_NAME, MARKER_CONTENT } = require('../src/test-mode'); // the real token: plant a marker the smoke build would accept
+  const expect = (name, got, want) => { if (got !== want) fail(`release flavour: ${name} (got ${got}, want ${want})`); };
+  const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'bento-gate-')));
+  try {
+    fs.writeFileSync(path.join(tmp, MARKER_NAME), MARKER_CONTENT, { mode: 0o644 });
+    expect('hasTestMarker with a valid marker file', hasTestMarker(tmp), false);
+    expect('hasTestMarker with a valid marker file (win32 branch asked for)', hasTestMarker(tmp, { platform: 'win32' }), false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true }); // tmp was created by mkdtemp above
+  }
+  argvPlatformChecks(unsafeSwitches, expect);
+  const ENV = { BENTO_TEST_HEADLESS: '1', BENTO_TEST_TRACE_DIR: os.tmpdir() };
+  for (const packaged of [false, true]) {
+    for (const testMarker of [false, true]) {
+      const opts = { packaged, testMarker };
+      expect(`testModeOn with env, packaged=${packaged}, marker=${testMarker}`, testModeOn(ENV, opts), false);
+      for (const sw of ['--remote-debugging-port=0', '--remote-debugging-pipe', '--ozone-platform=headless', '--user-data-dir=/x']) {
+        expect(`${sw} refused with env, packaged=${packaged}, marker=${testMarker}`, unsafeSwitches(['exe', sw], ENV, opts).length, 1);
+      }
+    }
+  }
+  process.stdout.write('ok   release flavour: no marker, environment or isPackaged value enables test mode; every test switch is refused\n');
+  process.exit(0);
+}
+
 const { hasTestMarker, MARKER_NAME, MARKER_CONTENT } = require(path.join(src, 'test-mode.js'));
 const { unsafeSwitches } = require(path.join(src, 'argv-policy.js'));
 // .native: on Windows the JS realpath keeps 8.3 short names (RUNNER~1), which the win32 marker check refuses.
@@ -152,13 +224,7 @@ try {
   expect('posix branch: size smaller (fake fs)', posix(fakePosix({ size: 0 })), false);
   expect('posix branch: another token (fake fs)', posix(fakePosix({}, MARKER_CONTENT.replace('v1', 'v2'))), false);
 
-  // Argv policy: a leading "/" is a switch on win32 ONLY (rule dropped -> /no-sandbox slips through; rule widened -> POSIX paths refused).
-  expect('argv policy: /no-sandbox is refused on win32', unsafeSwitches(['exe', '/no-sandbox'], {}, { platform: 'win32' }).length, 1);
-  expect('argv policy: /remote-debugging-port=0 is refused on win32', unsafeSwitches(['exe', '/remote-debugging-port=0'], {}, { platform: 'win32' }).length, 1);
-  expect('argv policy: a POSIX path is not a switch on linux', unsafeSwitches(['exe', '/home/u/x.pdf'], {}, { platform: 'linux' }).length, 0);
-  expect('argv policy: a POSIX path is not a switch on darwin', unsafeSwitches(['exe', '/Users/u/x.pdf'], {}, { platform: 'darwin' }).length, 0);
-  expect('argv policy: a drive path is not a switch on win32', unsafeSwitches(['exe', 'C:\\u\\x.pdf', 'plain.pdf'], {}, { platform: 'win32' }).length, 0);
-  expect('argv policy: --no-sandbox is refused everywhere', unsafeSwitches(['exe', '--no-sandbox'], {}, { platform: 'linux' }).length, 1);
+  argvPlatformChecks(unsafeSwitches, expect);
 
   const ENV = { BENTO_TEST_HEADLESS: '1' };
   const port = ['exe', '--remote-debugging-port=0'];
