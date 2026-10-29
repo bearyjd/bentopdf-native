@@ -336,16 +336,16 @@ Linux with no Wine, so only a GitHub Actions run on `windows-latest` can prove a
 only or partly, `[ ]` means not shown. Ticks are updated from the last run, not from intent.
 
 - [x] NSIS installer (per-user, not one-click, choosable folder, desktop and Start-menu shortcuts), portable exe: built, installed
-  silently, run, uninstalled on `windows-latest` (run 40805536068). Installer and portable exe both pass the Windows gate by 7-Zip extraction.
-- [~] `.pdf` registered under `OpenWithProgids` only (no default takeover), removed on uninstall: proven in that run.
-  Launch-with-a-PDF as a shell document tab: proven. **Second-instance forwarding: proven on the installed app for single-argument launches (run 40845803115, marker-gated test mode); portable exe: NOT VERIFIED, known failure (issue #11); multi-argument launches `[file URL, UNC]` crashed before `main.js` on the pre-main branch (open, not produced by Explorer).**
+  silently, run, uninstalled on `windows-latest` (run 40845803115). Installer and portable exe both pass the Windows gate by 7-Zip extraction.
+- [~] `.pdf` registered under `OpenWithProgids` only (no default takeover), removed on uninstall: proven in that run (40845803115).
+  Launch-with-a-PDF as a shell document tab: proven. **Second-instance forwarding: proven on the installed app for single-argument launches (run 40845803115, marker-gated test mode); portable exe: NOT VERIFIED, known failure (issue #11); multi-argument launches (`[file URL, UNC path]` and `[path with space, file URL, UNC path]`) can crash the installed app before `main.js` (open, tracking issue #14, not produced by Explorer's single `"%1"`).**
   UNC refusal, drive letters, `file:///C:/`, long paths: unit tests only.
 - [x] Sandbox on Windows: renderer `sandboxed: true`, `untrusted` integrity (Electron `getAppMetrics`), `/no-sandbox` refused; `crossOriginIsolated`, no external requests,
   `BENTO_*` ignored when packaged.
 - [~] Same hardening as Linux: fuses via the shared `afterPack` (checked on the real exe in CI), WASM outside the asar, `/switch` treated as a switch on win32
   (from the Chromium source, not measured), Windows path rules for static files (lexical unit tests; real NTFS not tested).
-- [x] Windows release gate (`verify-artifact-win.sh`) and its mutation test (52 caught, 0 missed in run 40845803115; passes on the real installer and portable exe in CI), including the win32 test-mode marker checks and marker absence.
+- [x] Windows release gate (`verify-artifact-win.sh`) and its mutation test (52 caught, 0 missed, 1 skipped (Git Bash cannot make symlinks) in run 40845803115; passes on the real installer and portable exe in CI), including the win32 test-mode marker checks and marker absence.
 - [x] CI workflow `desktop-windows.yml`: run 40845803115 green on `feat/m5-windows-on-main`; the portable second-instance check (issue #11) is a separate non-blocking step listed as a KNOWN FAILURE, NOT VERIFIED.
-- [ ] Code signing: optional via secrets, never exercised. Unsigned builds trigger SmartScreen.
+- [ ] Code signing: optional via secrets (main pushes and v* tags only), never exercised. Unsigned builds trigger SmartScreen again for every new version; see docs/desktop-windows.md. Issue #13 (compile test mode out of release builds) must be done before ANY signed release.
 - [ ] A release: `NOTICE` has unresolved lines (now including NSIS and Windows Electron DLLs), so tag builds fail by design.
 - [ ] A visible window on Windows (only the hidden test mode was ever run), real Explorer double-click, all-users install, upgrade install.

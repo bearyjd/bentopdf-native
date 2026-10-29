@@ -173,7 +173,7 @@ works like this: a packaged build honours test mode only if **both** the environ
 resources path is its own real path (no symlinked directory), the marker opens with `O_NOFOLLOW` (a
 symlink fails), `fstat` on that descriptor says regular file, exactly one hard link, owned by the current
 user, not group/world-writable, exactly 19 bytes, and the content is exactly `bento-test-mode-v1\n`.
-Anything else, including any error, means "not test mode". Unit tests cover each check alone (a fake `fs`
+Anything else, including any error, means "not test mode". **Issue #13:** this marker gate is a tripwire, not a boundary, and the test-mode code ships in every build; it must be compiled out of release builds before ANY signed release. Unit tests cover each check alone (a fake `fs`
 isolates `isFile`, `nlink`, owner, mode and size, which real files cannot) and were mutation-checked.
 `size` and `isFile` are not equivalent mutants once the fake `fs` is used; against a real filesystem the
 content comparison and the file type already reject what they would reject.
@@ -251,8 +251,8 @@ mitigated for deb/rpm). Windows are created with `sandbox: true` (asserted in
 `test/security.test.js`) and the packaged smoke test checks the seccomp/no-new-privs/capability state
 of every renderer.
 
-An open-with grant records the file's device and inode, is opened with `O_NOFOLLOW` (the path is
-already resolved), and `readFile` refuses it if the inode changed or the content no longer starts
+An open-with grant records the file's device and inode (as bigint, so 64-bit NTFS file ids are not truncated), is opened with `O_NOFOLLOW` on POSIX (the path is
+already resolved; win32 has no `O_NOFOLLOW`, see desktop-windows.md for its compensating checks), and `readFile` refuses it if the inode changed or the content no longer starts
 with `%PDF-`. Dialog grants record dev/ino too.
 
 "Open with" accepts only file arguments and `file://` URLs. A path is resolved with

@@ -12,8 +12,9 @@ See "What was and was not verified" at the end. In short: the Windows build conf
 exercised on Linux up to the unpacked app (a real `win-unpacked` tree with fuses flipped; the NSIS
 step needs Wine and cannot run here); the installer, uninstaller, registry, shortcuts, marker-gated test mode
 and sandbox were exercised by `desktop-windows.yml` on `windows-latest`. **The last run (40845803115) is green**;
-the portable exe's second-instance forwarding (issue #11) runs as a separate, non-blocking step that is listed as a
-KNOWN FAILURE in the job summary and is NOT VERIFIED (the portable cannot enter test mode).
+the portable exe's second-instance forwarding (issue #11) runs as its own step whose exit code 3 (only the known
+signature) is listed as `KNOWN FAILURE #11` in the job summary and is NOT VERIFIED (the portable cannot enter test
+mode); any other portable failure turns the job red.
 
 ## Prerequisites (build)
 
@@ -45,10 +46,22 @@ come from `desktop/brand.json`, including the new `iconIco`). `packaging/icons/r
 | Format | How | Notes |
 |---|---|---|
 | Installer | run `...-setup-x64.exe` | per-user by default (no administrator rights, installs under `%LOCALAPPDATA%\Programs`), not one-click: the wizard lets you change the folder and offers all-users; desktop and Start-menu shortcuts |
-| Portable | run `...-portable-x64.exe` | nothing is installed or registered; the exe unpacks to a temp folder on each start, so startup is slower than the installed app |
+| Portable (EXPERIMENTAL) | run `...-portable-x64.exe` | **the installer is the only supported Windows target.** The portable exe fails if a second PDF is opened while it runs (issue #11). Nothing is installed or registered; the exe unpacks to a temp folder on each start, so startup is slower than the installed app |
 | Silent (CI) | `setup.exe /S /D=C:\path` | `/D=` must be last and unquoted |
 
-Uninstall via Settings > Apps or `Uninstall BentoPDF Native.exe`. It removes the install folder, the
+**All-users installs and the install folder.** An all-users (per-machine) install registers the app in HKLM, where an
+administrator later launches it from the ProgID. If the folder were user-writable, a standard user could replace
+the exe the administrator runs. The default per-machine location (Program Files) is writable only by
+administrators, but the wizard lets you pick any folder. `installer.nsh` therefore **refuses a per-machine install
+whose folder is not under `%ProgramFiles%` (or contains `..`)** (checked in `customInit`, so also for silent
+`/D=` installs, and again after the directory page). Per-user installs are unaffected: the folder is the user's own,
+and the user can replace the app there anyway. **NOT VERIFIED:** the per-machine path never ran (the lifecycle smoke
+installs per-user; the NSIS code is only compiled by CI), and the ACL of a custom per-user folder is the user's
+choice (a folder shared with other users is the user's responsibility).
+
+Uninstall via Settings > Apps or `Uninstall BentoPDF Native.exe`. It removes the files the installer put in the install
+folder (app subfolders and the Electron file set; NOT `RMDir /r` of the folder: a foreign file in a user-chosen folder
+survives, proven by the canary check of the lifecycle smoke when it ran on windows-latest), the
 shortcuts, the uninstall entry and the `.pdf` registry keys listed below. It does **not** delete your
 settings/profile in `%APPDATA%\BentoPDF Native` (not installed files; `deleteAppDataOnUninstall` is off;
 pass `--delete-app-data` to the uninstaller to remove it). There is no auto-update, deliberately: the app makes
@@ -66,12 +79,26 @@ which certificate type the owner will use). Verify a download against the publis
 Get-FileHash .\bentopdf-native-0.1.0-setup-x64.exe -Algorithm SHA256   # compare with SHA256SUMS
 ```
 
-Optional signing in CI (`desktop-windows.yml`, step "Optional code signing"): secrets `WIN_CSC_LINK` (+
-`WIN_CSC_KEY_PASSWORD`) become `CSC_LINK`/`CSC_KEY_PASSWORD` for electron-builder, or the Azure Trusted Signing
-set `AZURE_SIGN_ENDPOINT`, `AZURE_SIGN_ACCOUNT`, `AZURE_SIGN_PROFILE`, `AZURE_SIGN_PUBLISHER`, `AZURE_TENANT_ID`,
-`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. Variables that are empty are never exported. electron-builder runs our
-`afterPack` fuse hook first and signs afterwards, so the signature covers the fused binary. **Signing was never
-exercised (no secrets exist): NOT VERIFIED.**
+**What an unsigned installer means in practice.** SmartScreen warns again for every new version (reputation is per
+file hash, and builds are not reproducible bit for bit), so each release asks users to click through. Check the
+SHA256 of every download against the published `SHA256SUMS` (that proves the file is the one CI built, not who built
+it). This is **unofficial packaging** of the upstream BentoPDF web app, not a release of the upstream project.
+Unsigned, freshly packaged Electron executables are also a common antivirus false-positive pattern: expect some
+scanners to flag them (NOT measured here).
+
+Optional signing in CI (`desktop-windows.yml`): the secrets `WIN_CSC_LINK` (+ `WIN_CSC_KEY_PASSWORD`) become
+`CSC_LINK`/`CSC_KEY_PASSWORD` for electron-builder, or the Azure Trusted Signing set `AZURE_SIGN_ENDPOINT`,
+`AZURE_SIGN_ACCOUNT`, `AZURE_SIGN_PROFILE`, `AZURE_SIGN_PUBLISHER`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+`AZURE_CLIENT_SECRET`. They are handed **only** as `env:` of the one build step "signed when secrets exist" (never via
+`$GITHUB_ENV`, so no later step inherits them and a newline in a value cannot inject variables), and that step runs only
+for pushes to `main` and `v*` tags: pull requests, `workflow_dispatch` from other branches and the temporary branch
+trigger use the unsigned step, whose environment holds no secret. With no secrets the signing step is inert (empty
+values are unset). **Before any secret is added the repository owner must create a GitHub Environment (for example
+`windows-signing`) restricted to `main` and `v*` tags and move the secrets there; the workflow deliberately names no
+environment, so nothing is created or protected until then.** No secrets were created by this work. electron-builder
+runs our `afterPack` fuse hook first and signs afterwards, so the signature covers the fused binary. **Signing was never
+exercised (no secrets exist): NOT VERIFIED.** Issue #13 (compile test mode out of release builds) must be resolved
+before ANY signed release: today the marker-gated test mode is present in the shipped code of every build.
 
 ## File association ("Open with")
 
@@ -202,10 +229,12 @@ dialog and `SOURCE.txt`, as on Linux.
 ## Known limits
 
 - x64 only (no arm64, no 32-bit). No Microsoft Store/MSIX, no winget manifest, no auto-update.
-- Network shares (UNC) are refused for open-with; mapped drives are not distinguished.
+- Network shares (UNC) are refused for open-with. A mapped drive cannot be told from a local one lexically, but the resolved (native real) path is checked again, so a mapped drive that resolves to a UNC path is refused (fake-fs unit test; real mapped drives NOT VERIFIED).
+- On win32 `fs.constants.O_NOFOLLOW` does not exist: the open-with "no symlink" open cannot rely on it. It is compensated by `lstat` (not a link), the native real path equal before and after the open, and the opened handle having the lstat'ed file's 64-bit id (bigint `dev`/`ino`). Unit tests use a fake fs; real NTFS links NOT VERIFIED beyond the pre-existing dev/ino swap test.
 - The portable exe leaves its unpacked copy in `%TEMP%` while running, and wipes that directory (`RMDir /r`) at every
   launch, including a second launch while the first is still running from it (a plausible cause of issue #11, NOT verified).
-- The portable exe cannot be smoke-tested in test mode (see "Test mode on Windows").
+- The portable exe cannot be smoke-tested in test mode (see "Test mode on Windows"). It is EXPERIMENTAL: the installer is the only supported Windows target, and the portable exe fails if a second PDF is opened while it runs (issue #11).
+- `static-files.js` refuses Windows-unsafe segment names (`~digit`, colon, trailing dot, device names) on every platform on purpose; `scripts/check-dist.sh` (`desktop/tools/check-dist-names.js`) and `test/dist-names.test.js` fail if a bundle asset would trip them.
 - The `.ico` is rendered from the same neutral glyph as the PNG; the product-name trademark question is unchanged.
 - The bundled upstream pages do not consume open-with events yet (M3 viewer).
 
@@ -222,7 +251,7 @@ and tags. Earlier evidence from the pre-main branch (runs 40805536068 ... 408136
 - Build of the NSIS installer and portable exe; the Windows gate passes on both (7-Zip extraction) and on
   `win-unpacked`; inside every gate run `tools/check-asar-policy.js` ran the packaged win32 marker branch against real
   NTFS files (valid accepted; extra bytes, other token, hard link, file symlink, directory, junctioned resources refused)
-  and against a fake fs, and the argv policy. Gate mutation test: 52 caught, 0 missed, 1 skipped (symlink creation in Git Bash).
+  and against a fake fs, and the argv policy. Gate mutation test: 52 caught, 0 missed, 1 skipped (Git Bash cannot make symlinks).
 - Silent per-user install and uninstall: files, HKCU uninstall entry, shortcuts (no sandbox/devtools arguments), ProgID,
   `OpenWithProgids`, `.pdf` default untouched; uninstall leaves no files, keys or shortcuts.
 - **Marker-gated test mode on the installed copy:** without the marker the test switches are refused (exit 2, no debug
@@ -242,14 +271,17 @@ and tags. Earlier evidence from the pre-main branch (runs 40805536068 ... 408136
 - **Portable exe, second instance (issue #11): NOT VERIFIED, KNOWN FAILURE.** The pre-main branch measured that a second
   `portable.exe` launch hangs before starting an app. The portable stub runs `RMDir /r` on its extraction directory at
   every launch (portable.nsi), which plausibly explains it (NOT verified) and also means no test-mode marker can be
-  placed, so it cannot be exercised now. The workflow runs it as its own `continue-on-error` step and the summary lists it.
+  placed, so it cannot be exercised now. `packaged-smoke-win.js --portable --mode second-instance-only` exits 3 ONLY for
+  that signature (first instance healthy; second launch hung or its forwarding unobservable) and 1 for anything else;
+  `portable-second-step.sh` makes 3 a green step with a `KNOWN FAILURE #11` summary line and every other code red
+  (exit-code policy unit-tested on Linux with fakes; the first real run of the new step is listed below).
 - **Portable exe in test mode: NOT VERIFIED** (page isolation, sandbox level, open-with): proven on the installed app
   only, which ships the same payload (both pass the gate by extraction).
-- **Multi-argument launches can crash the installed app before JavaScript runs:** `[file URL, UNC path]` and
-  `[path with space, file URL, UNC path]` exit with code 4294967295, no trace file and no Chromium log (measured, reproducible
-  in this run and the previous ones); `[space, URL]` and `[space, UNC]` are fine, and every single argument is fine. Cause
-  NOT determined (happens before `main.js`; not our argument policy). Not produced by Explorer's open command (one `"%1"`),
-  reported by the smoke as `INFO multi-argument` lines, not as checks.
+- **Multi-argument launches can crash the installed app before JavaScript runs** (tracking issue #14): `[file URL, UNC path]`
+  and `[path with space, file URL, UNC path]` exit with code 4294967295, no trace file and no Chromium log (measured,
+  reproducible in this run and the previous ones); `[space, URL]` and `[space, UNC]` are fine, and every single argument is
+  fine. Cause NOT determined (happens before `main.js`; not our argument policy). Not produced by Explorer's open command
+  (one `"%1"`), reported by the smoke as `INFO multi-argument` lines, not as checks.
 - Argument policy: **measured** on Windows: `/no-sandbox` as the first instance's argument is refused with exit 2 by our
   code. **Read from Chromium source, NOT measured**: that Chromium itself would honour `/switch` and lowercases names. A
   POSIX-looking `/d/a.pdf` is therefore dropped (whole launch ignored in a second instance) on win32; real Windows file
@@ -258,10 +290,10 @@ and tags. Earlier evidence from the pre-main branch (runs 40805536068 ... 408136
 - Code signing, SmartScreen behaviour, an all-users (per-machine) install, upgrade-over-existing install, a visible
   window, real Explorer double-click / "Open with" / default-app selection, Windows Firewall behaviour, Windows ARM
   and older Windows versions: NOT VERIFIED (never run).
-- NTFS specifics (8.3 names, streams, mapped drives, 64-bit file index precision in `dev`/`ino`) are covered by lexical unit
-  tests only. On Windows a symlink swapped in after a grant is refused by the dev/ino identity check, not by `ELOOP`.
+- NTFS specifics (8.3 names, streams, mapped drives) are covered by lexical unit tests and fake-fs tests only; 64-bit file ids
+  are compared as bigint (fake-fs tests with ids that differ only beyond 2^53). On Windows a symlink swapped in after a grant is refused by the dev/ino identity check, not by `ELOOP`.
 - Licences of what the Windows packages add (NSIS, its plugins, Microsoft DLLs inside Electron) were not reviewed; see NOTICE.
-- Multi-argument second-instance launches were not re-measured on this run beyond the INFO lines in the smoke log.
+- Multi-argument second-instance launches were not re-measured beyond the INFO lines in the smoke log (issue #14).
 - The win32 marker check's reliance on install-directory ACLs (no owner/mode check) is a design statement, not tested.
 - Linux side (dev host): `packaging/test-verify-artifact.sh --appimage-only` aborts silently when `desktop/release/` is
   absent (`newest()` under `set -euo pipefail`; a bug on main, not fixed here); with explicit
