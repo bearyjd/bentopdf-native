@@ -203,6 +203,14 @@ without: shell UI served from `app.asar` (`bento://shell`, 129 tools
 rendered), tool tab isolated, renderers sandboxed, hostile `BENTO_*` env ignored,
 second instance forwards its PDF. deb, rpm, Flatpak, macOS, Windows: not built.
 
+**Packaged, after the test-mode marker (S4, AppImage rebuilt from 887aeed with electron-builder + harden,
+deb/rpm not built: fpm fails here on a missing libcrypt.so.1):** `verify-artifact.sh --expect-commit 887aeed`
+VERIFIED (14 ok lines incl. the new no-marker check; same "not for release" NOTICE note); with a marker
+added to a real extracted tree (resources/, root, symlink) the gate FAILS in all 3 cases.
+`test/packaged-smoke.js` (extracted copy + marker) 18/18 with a PDF argument and 18/18 with
+`SMOKE_NO_PDF=1`, including the two negative controls (no marker => exit 2; AppRun scrubs the env =>
+exit 2). `test-verify-artifact.sh` gained 4 mutations but was NOT run (it needs deb + rpm + AppImage).
+
 **NOT VERIFIED (M3a):**
 
 - The packaged smoke test drives the artifact over `--remote-debugging-port`, which a packaged
