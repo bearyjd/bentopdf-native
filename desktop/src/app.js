@@ -27,7 +27,9 @@ function prepare(options = {}) {
 async function startApp(options) {
   const { distDir, transport, onBlocked = () => {}, show = true, dialogs = dialog } = options;
   if (!TRANSPORTS.includes(transport)) throw new Error(`unknown transport: ${transport}`);
-  const rootReal = fs.realpathSync(distDir);
+  // .native: the JS realpath keeps 8.3 short names (RUNNER~1) on Windows, which would never match the
+  // canonical paths fs.promises.realpath returns for files inside the root.
+  const rootReal = fs.realpathSync.native(distDir);
   if (!fs.existsSync(path.join(rootReal, 'index.html'))) {
     throw new Error(`${rootReal} does not look like a BentoPDF bundle (no index.html)`);
   }

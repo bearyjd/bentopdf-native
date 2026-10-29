@@ -37,6 +37,25 @@ function mimeFor(file) {
   return MIME_TYPES[path.extname(file).toLowerCase()] || DEFAULT_MIME;
 }
 
+// Device names Windows resolves in every directory, with or without an extension (CON.html is the console).
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])$/i;
+
+/**
+ * Names that mean something other than themselves on Windows (NTFS/Win32): alternate data
+ * streams and drive letters (`:`), wildcards, trailing dots/spaces (silently stripped, so
+ * `_headers.` would open `_headers`), 8.3 short names (`_HEADE~1`) and device names.
+ * Refused on EVERY platform: the bundle contains no such names (checked), and one rule
+ * set is testable everywhere. Runs on the decoded URL path, before any file system call.
+ */
+function isWindowsUnsafeSegment(segment) {
+  if ([...segment].some((c) => c.charCodeAt(0) < 32)) return true;
+  if (/[:<>"|?*]/.test(segment)) return true;
+  if (segment === '.' || segment === '') return false;
+  if (/[. ]$/.test(segment)) return true;
+  if (/~\d/.test(segment)) return true;
+  return WINDOWS_DEVICE.test(segment.split('.')[0].trimEnd());
+}
+
 function decodePath(urlPath) {
   let decoded;
   try {
@@ -45,13 +64,15 @@ function decodePath(urlPath) {
     return null;
   }
   if (decoded.includes('\0') || decoded.includes('\\')) return null;
-  if (decoded.split('/').some((segment) => segment === '..')) return null;
+  const segments = decoded.split('/');
+  if (segments.some((segment) => segment === '..' || isWindowsUnsafeSegment(segment))) return null;
   return decoded;
 }
 
 /** `_headers`/`_redirects` are host config, dotfiles are never app content. */
 function isHiddenSegment(segment) {
-  return segment.startsWith('.') || segment === '_headers' || segment === '_redirects';
+  const name = segment.toLowerCase(); // NTFS and APFS are case-insensitive: `_HEADERS` is the same file
+  return name.startsWith('.') || name === '_headers' || name === '_redirects';
 }
 
 function isInside(root, candidate) {
@@ -174,4 +195,4 @@ async function serveStatic({ rootReal, method, urlPath, range, baseHeaders }) {
   return { status: parsed ? 206 : 200, headers, body };
 }
 
-module.exports = { serveStatic, resolveFile, parseRange, mimeFor, isInside };
+module.exports = { serveStatic, resolveFile, parseRange, mimeFor, isInside, isWindowsUnsafeSegment };

@@ -12,12 +12,13 @@ if (sandboxOff.length > 0) {
   process.exit(2);
 }
 
+const fs = require('node:fs');
 const path = require('node:path');
 const { dialog, Menu, shell } = require('electron');
 const { prepare, startApp, TRANSPORTS, log } = require('./app');
 const brand = require('../brand.json');
 const { aboutDetail, buildMenuTemplate, SOURCE_URL } = require('./menu');
-const { unsafeSwitches } = require('./argv-policy');
+const { testHeadless, unsafeSwitches } = require('./argv-policy');
 const { pdfPathsFromArgv } = require('./open-file');
 
 // Decided by experiment, see docs/m2-findings.md.
@@ -37,6 +38,16 @@ const die = (what, err) => {
 };
 process.on('uncaughtException', (err) => die('uncaughtException', err));
 process.on('unhandledRejection', (err) => die('unhandledRejection', err));
+
+// Test mode only: OS-level sandbox state of every Chromium process (Electron's
+// ProcessMetric.sandboxed / integrityLevel are reported on Windows and macOS), written next to the
+// profile and to stderr so the packaged smoke test can read it even when the launcher swallows stderr.
+function logProcessSandbox() {
+  const processes = app.getAppMetrics().map(({ type, sandboxed, integrityLevel }) => ({ type, sandboxed, integrityLevel }));
+  const json = JSON.stringify(processes);
+  process.stderr.write(`[bento-test] process-sandbox ${json}\n`);
+  fs.writeFileSync(path.join(app.getPath('userData'), 'bento-test-sandbox.json'), json);
+}
 
 function installMenu() {
   const showAbout = () =>
@@ -85,7 +96,7 @@ if (refused.length > 0) {
       return;
     }
     const win = handle && handle.window;
-    if (win && !win.isDestroyed()) {
+    if (win && !win.isDestroyed() && !testHeadless()) {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
@@ -103,7 +114,10 @@ if (refused.length > 0) {
     .whenReady()
     .then(async () => {
       installMenu();
-      handle = await startApp({ distDir, transport });
+      // Test mode (BENTO_TEST_HEADLESS=1, see argv-policy.js): the window is created hidden and never shown,
+      // so CI runners and developers see nothing on screen. Production launches never set it.
+      handle = await startApp({ distDir, transport, show: !testHeadless() });
+      if (testHeadless()) logProcessSandbox();
       openPaths(waiting.splice(0));
     })
     .catch((err) => die('Failed to start', err));
