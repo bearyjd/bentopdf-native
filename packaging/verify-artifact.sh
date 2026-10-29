@@ -245,7 +245,7 @@ case "$KIND" in
     # deb/rpm launchers start the binary directly, with NO env scrub. For these the only defence for the packaged
     # test mode is that the install tree is root-owned (a user cannot create the marker in it): see docs/desktop-linux.md.
     if [ -z "$TREE" ]; then
-      if [ "$KIND" = deb ]; then NOT_ROOT="$(dpkg-deb -c "$ART" | awk '$2 != "root/root"' | wc -l)"; else NOT_ROOT="$(rpm -qp --queryformat '[%{FILEUSERNAME}:%{FILEGROUPNAME}\n]' "$ART" | grep -vxc 'root:root' || true)"; fi
+      if [ "$KIND" = deb ]; then NOT_ROOT="$(dpkg-deb -c "$ART" | awk '$2 != "0/0" && $2 != "root/root"' | wc -l)"; else NOT_ROOT="$(rpm -qp --queryformat '[%{FILEUSERNAME}:%{FILEGROUPNAME}\n]' "$ART" | grep -vxc 'root:root' || true)"; fi
       [ "$NOT_ROOT" = 0 ] || fail "$NOT_ROOT package entr(ies) not owned by root:root (the root-owned install tree is the only marker defence for $KIND)"
       pass "$KIND payload: every entry owned by root:root, so no unprivileged user can plant the test-mode marker"
     fi ;;
