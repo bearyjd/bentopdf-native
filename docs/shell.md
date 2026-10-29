@@ -249,7 +249,10 @@ WebContents has focus. macOS gets the `appMenu` role; `CmdOrCtrl` maps to Cmd.
 - Print, annotation, text editing, redaction, signing in the shell.
 - macOS and Windows (including the UNC rules, which are unit-tested as strings
   on Linux only).
-- PACKAGED_PLACEHOLDER
+- Packaged builds other than the Linux AppImage (deb, rpm, Flatpak, macOS,
+  Windows). For the AppImage built from this branch: `verify-artifact.sh` and
+  `test/packaged-smoke.js` (16/16, with and without a PDF argument; the shell UI
+  is served from `app.asar`) passed, headless.
 
 ## TODO (issue-ready)
 

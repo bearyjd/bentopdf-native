@@ -89,22 +89,30 @@ Signing keys/certs are never committed; env vars or CI secrets only.
 ## M3 status (first slice "M3a", details in [shell.md](shell.md))
 
 `[x]` = implemented and covered by a passing test on the dev host (headless,
-Electron 45.1.0); `[ ]` = not done. Nothing here was seen in a visible window.
+Electron 45.1.0); `[~]` = PARTIAL; `[ ]` = not done. Nothing here was seen in a visible window.
 
 - [x] Tabs: one `WebContentsView` per tab in one window, each in its own
   in-memory partition (`bento-tab-<id>`) with the full default-session
   treatment (scheme handler + COOP/COEP/CORP + CSP, permission lock, non-app
   requests cancelled). Per tab: `crossOriginIsolated`, the M2 bridge, the
   permission lock and storage isolation (tab/tab and tab/shell) are e2e-tested.
-- [x] Live-view cap (default 3) with discard and reload-on-activation that
-  re-hands the document (policy unit-tested, discard/reload e2e-tested).
-  Count-based, not memory-based.
-- [x] Main-process document store (validated paths only, ids to renderers) and
-  shell IPC gated to the registered shell WebContents, with hostile-input tests.
-- [x] Tool sidebar derived from `dist` (129 entries, 118 with upstream's
-  category), search, recent files (10, re-validated on open).
-- [x] Handoff of the active document into a tool page via a per-tool adapter;
-  proven for **Merge PDF only**.
+- [x] Live-view limit: a weighted slot budget (default 6; ordinary tool 1, OCR 2,
+  LibreOffice conversion 4, from the M2 RSS numbers, constants in
+  `live-budget.js`) with discard and reload-on-activation that re-hands the
+  document (policy unit-tested; discard/reload and the lockdown after reload
+  e2e-tested). The weights are estimates, not a measurement of a running shell.
+- [x] Main-process document store (validated paths only, ids to renderers;
+  released when the last tab closes, LRU eviction of unshown documents; the old
+  hard 32-documents-per-run limit is gone) and shell IPC gated to the
+  registered shell WebContents, with hostile-input tests. Network (UNC) paths
+  refused; native dialogs only for the active tab; main-process accumulators
+  bounded.
+- [x] Tool sidebar derived from `dist` (129 pages, 118 categorised: upstream's
+  categories, not Acrobat's), search, recent files (10, re-validated on open;
+  only a confirmed missing/invalid file is dropped).
+- [~] PARTIAL: handoff adapter = a selector table feeding the M2
+  `handoffToInput`, Merge PDF verified only, no return path. Runs in the
+  background with a visible status and surfaced errors.
 - [x] Menus: File (Open, Open Recent, Close Tab, Quit), Tab (Next/Previous,
   Ctrl+Tab), View (Reload Tool, zoom), Help (About + AGPL source offer).
   Template unit-tested; never clicked.
@@ -115,7 +123,8 @@ Electron 45.1.0); `[ ]` = not done. Nothing here was seen in a visible window.
 - [ ] Print, drag and drop onto the window, native save-as from the shell.
 - [ ] Categories mapped to Acrobat-style task groups (upstream's sections used).
 - [ ] Persisted per-tab settings (partitions are in-memory: upstream settings in
-  `localStorage` do not survive a tab or a restart).
+  `localStorage` do not survive a tab or a restart; issue-ready note in
+  [shell.md](shell.md) TODO).
 
 Mutation checks (each mutation applied alone, then reverted; it must make a
 test fail):
@@ -130,10 +139,40 @@ test fail):
 | `openTool`: document id not checked against the store | RED: shell-ipc unit |
 | Recents: hostile entries kept | RED: shell-store unit |
 | Handoff grant: file identity (`dev`/`ino`) not compared | RED: ipc unit |
-| Memory cap ignored | RED: shell-tabs unit + e2e shellMemcap |
+| Live-view limit ignored | RED: shell-tabs unit + e2e shellMemcap |
 | Registry: excluded pages listed | RED: shell-registry unit |
 | Store: path not validated | RED: shell-store unit |
 | Default session left unlocked in shell mode | RED: e2e shellIpcReject |
+
+Review round (applied on a copy of the worktree under a mktemp dir, one at a
+time, each reverted; "RED" = the named test failed, baseline green):
+
+| Mutation | Result |
+|---|---|
+| tab-manager `close()` does not discard the view | RED: shell-tabs unit |
+| Handoff uses the wrong document id (first in the store) | RED: e2e shellHandoff (two documents open) |
+| Stale-view guard in `loadInto` removed | RED: shell-tabs unit |
+| Previous view not hidden on activate | RED: shell-tabs unit |
+| `navigate` drops the document id | RED: shell-tabs unit |
+| Store dedupes by path only (no dev/ino) | RED: shell-store unit |
+| `store.touch` removed from the handoff | RED: e2e shellHandoff |
+| Handoff awaited by activate/open (blocks) | RED: shell-tabs unit |
+| Weights ignored by the live-view policy | RED: shell-tabs unit |
+| Document not released when its tab closes | RED: e2e shellLifecycle |
+| Window teardown skips `closeAll` / skips `views.dispose` | RED: e2e shellTeardown (both) |
+| Native-dialog active-tab gate removed | RED: shell-hardening unit + e2e shellIpcReject |
+| Closed tab's session not emptied | RED: e2e shellLifecycle |
+| Handoff error not surfaced to the status | RED: e2e shellHandoffError |
+| Window title taken from the page | RED: e2e shellLifecycle |
+| Per-path serialisation of concurrent opens removed | **GREEN (survived)**: the store and tab lookup run synchronously after the await, so duplicates cannot occur even without it; the helper is unit-tested (`serialByKey`) but its wiring is defence in depth with no test that can fail |
+
+**Packaged (Linux AppImage only, this branch's HEAD, built with
+`electron-builder --linux AppImage`, hardened, headless):** `verify-artifact.sh
+--allow-dirty` VERIFIED (13 checks; the NOTICE-marker line is the usual "not for
+release" note); `test/packaged-smoke.js` 16/16 with a PDF argument and 16/16
+without: shell UI served from `app.asar` (`bento://shell`, 129 tools
+rendered), tool tab isolated, renderers sandboxed, hostile `BENTO_*` env ignored,
+second instance forwards its PDF. deb, rpm, Flatpak, macOS, Windows: not built.
 
 **NOT VERIFIED (M3a):**
 
@@ -142,11 +181,12 @@ test fail):
   person or a real input event.
 - Print; annotate/edit in a viewer; redaction; signing flows; any tool other
   than Merge PDF receiving the document.
-- macOS and Windows (menus use `CmdOrCtrl`, `appMenu` on macOS: untested).
-- Memory under real tab load (several heavy tools open at once).
-- Packaged builds were not rebuilt; `test/packaged-smoke.js` was adapted to the
-  shell but not run; serving `src/shell/ui` from an asar archive was only probed
-  outside a packaged build (200 for the shell files, see shell.md).
+- macOS and Windows (menus use `CmdOrCtrl`, `appMenu` on macOS; UNC rules only
+  tested as strings on Linux).
+- Memory under real tab load: the live-view weights are estimates from M2 RSS
+  numbers, never measured on a running shell.
+- The `BENTO_TRANSPORT=http` path is a test-only harness and is not a supported
+  way to run the app.
 
 ### Gap analysis vs Acrobat Pro (honest, by feature)
 

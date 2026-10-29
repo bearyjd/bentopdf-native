@@ -8,8 +8,9 @@
 // (each `flatpak run` has its own sandbox /tmp, so Chromium's singleton socket is not shared).
 // Launches the real artifact with --ozone-platform=headless, hostile BENTO_*
 // environment variables and a PDF argument, then drives the pages (a tool tab and
-// the shell UI; adapted to the M3a shell, NOT re-run against a packaged build yet) over the
+// the shell UI; run against a packaged AppImage, see docs/shell.md) over the
 // Chromium DevTools protocol (a Chromium flag, so it needs no hook in the app).
+// SMOKE_NO_PDF=1 starts it without a PDF argument (a home tab instead of a document tab).
 // Nothing is ever shown on screen. Exit code is non-zero on any failed check.
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -123,7 +124,7 @@ async function secondInstance(shellCdp) {
 }
 
 async function main() {
-  const first = launch([pdfA]);
+  const first = launch(process.env.SMOKE_NO_PDF ? [] : [pdfA]);
   try {
     const port = await until(() => (first.stderr.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/) || [])[1], 90000, 'DevTools port');
     const findPage = (prefix) => until(async () => {
@@ -172,7 +173,14 @@ async function main() {
     // "Open with": the argv path was validated into the document store and opened in a tab.
     const shellCdp = new Cdp((await findPage('bento://shell/')).webSocketDebuggerUrl);
     await shellCdp.open();
-    check('launch-argument PDF opened as a document tab', await until(() => shellHasDoc(shellCdp, 'first.pdf'), 20000, 'first.pdf tab').catch(() => false));
+    if (process.env.SMOKE_NO_PDF) {
+      check('no argument: a home tab and no document', await until(() => shellCdp.js(`window.bentoShell.getState().then((s) => s.tabs.length === 1 && s.docs.length === 0)`), 20000, 'home tab').catch(() => false));
+    } else {
+      check('launch-argument PDF opened as a document tab', await until(() => shellHasDoc(shellCdp, 'first.pdf'), 20000, 'first.pdf tab').catch(() => false));
+    }
+    // The shell UI came out of the asar, with the brand title set by the main process (packaged-only facts).
+    const shellFacts = await shellCdp.js(`({ origin: location.origin, ready: document.body.dataset.ready, tools: document.querySelectorAll('#tools button').length })`);
+    check('shell UI served from the packaged asar (bento://shell, ready, tool list rendered)', shellFacts.origin === 'bento://shell' && shellFacts.ready === 'true' && shellFacts.tools > 100, JSON.stringify(shellFacts));
 
     // Second instance forwards its file to the first (single-instance lock).
     if (!isFlatpak) await secondInstance(shellCdp);
