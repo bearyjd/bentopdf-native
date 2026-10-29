@@ -1,22 +1,37 @@
 'use strict';
 
 // Headless smoke test of a PACKAGED Windows build (installed tree, win-unpacked or portable exe).
-//   node test/packaged-smoke-win.js <path-to-exe>
-// Launches the real executable in test mode (BENTO_TEST_HEADLESS=1: the window is created hidden and
-// never shown), with hostile BENTO_* variables and a PDF argument, then drives the page over the
-// Chromium DevTools protocol (port read from <profile>/DevToolsActivePort). Every check runs even
-// after a failure; the exit code is non-zero if any failed. Windows only: it uses taskkill.
+//   node test/packaged-smoke-win.js <path-to-exe> [--resources <dir>] [--portable] [--mode full|no-second-instance|second-instance-only]
+// A packaged build honours test mode only with BENTO_TEST_HEADLESS=1 AND the marker <resources>\.bento-test-mode
+// (src/test-mode.js). This runner first proves that WITHOUT the marker the test switches are refused, then writes
+// the marker into <resources> (default: next to the exe), runs the checks, and REMOVES the marker again (checked)
+// whatever happened. Only ever point it at a disposable copy (CI: the freshly installed tree).
+// The portable exe cannot be put in test mode: its stub extracts the app to %TEMP%\<dir> at every launch and
+// runs `RMDir /r` on that directory first (app-builder-lib templates/nsis/portable.nsi, also with
+// portable.unpackDirName), so a pre-placed marker is always deleted. --portable therefore runs only the checks
+// that need no test mode and lists the rest as NOT VERIFIED.
+// In test mode the window is created hidden and never shown. Launched with hostile BENTO_* variables and a PDF
+// argument, the pages (a tool tab and the shell UI) are driven over the Chromium DevTools protocol (port read
+// from <profile>/DevToolsActivePort). Every check runs even after a failure; the exit code is non-zero if any
+// Windows only: it uses taskkill.
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
+const { MARKER_NAME, MARKER_CONTENT } = require('../src/test-mode');
+
 const exe = process.argv[2];
-if (!exe || process.platform !== 'win32') {
-  process.stderr.write('usage (Windows only): packaged-smoke-win.js <exe>\n');
+const opt = (name, fallback) => { const i = process.argv.indexOf(name); return i > 2 ? process.argv[i + 1] : fallback; };
+const portable = process.argv.includes('--portable');
+const mode = opt('--mode', 'full');
+const resources = opt('--resources', path.join(path.dirname(exe || '.'), 'resources'));
+if (!exe || process.platform !== 'win32' || !['full', 'no-second-instance', 'second-instance-only'].includes(mode)) {
+  process.stderr.write('usage (Windows only): packaged-smoke-win.js <exe> [--resources <dir>] [--portable] [--mode full|no-second-instance|second-instance-only]\n');
   process.exit(2);
 }
+const marker = path.join(resources, MARKER_NAME);
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'bento-win-'));
 const profile = path.join(work, 'profile');
 const spaced = path.join(work, 'dir with space');
@@ -126,25 +141,28 @@ async function launchSecond(args, label) {
   return { code: exited.code, events, reachedMainJs };
 }
 
+// Since M3a the window is the tabbed shell: an opened PDF becomes a document tab in the shell state.
+const shellHasDoc = (shellCdp, name) =>
+  shellCdp.js(`window.bentoShell.getState().then((s) => s.tabs.some((t) => t.docName === ${JSON.stringify(name)}))`);
+
 async function secondInstance(cdp) {
-  await cdp.js('window.__opened = []; window.bentoDesktop.onFileOpened((f) => window.__opened.push(f.name)); true');
   // The registered open command passes exactly one "%1", so each argument kind is its own launch.
   const space = await launchSecond([pdfB], 'backslash path with space and non-ASCII');
   check('second instance (path with space + non-ASCII) exits cleanly', space.code === 0, `exit=${space.code}`);
   check('second-instance event for it arrived in the first instance (positive evidence)', /second-instance argv=.*second \u00fc\.pdf/.test(space.events), /second-instance argv=.*second \u00fc\.pdf/.test(space.events) ? '' : 'no event in the test event log');
-  check('second instance: backslash path with space and non-ASCII reached the first instance (grant)', await until(() => cdp.js('window.__opened.includes("second \\u00fc.pdf")'), 20000, 'forwarded file').catch(() => false));
+  check('second instance: backslash path with space and non-ASCII reached the first instance (grant)', await until(() => shellHasDoc(cdp, 'second \u00fc.pdf'), 20000, 'forwarded file').catch(() => false));
 
   const url = await launchSecond([pathToFileURL(pdfC).href], 'file:///C:/... URL');
   check('second instance (file URL) exits cleanly', url.code === 0, `exit=${url.code}`);
   check('second-instance event for the file URL arrived (positive evidence)', /second-instance argv=.*third\.pdf/.test(url.events), /second-instance argv=.*third\.pdf/.test(url.events) ? '' : 'no event in the test event log');
-  check('second instance: file:///C:/... URL reached the first instance (grant)', await until(() => cdp.js('window.__opened.includes("third.pdf")'), 20000, 'forwarded URL').catch(() => false));
+  check('second instance: file:///C:/... URL reached the first instance (grant)', await until(() => shellHasDoc(cdp, 'third.pdf'), 20000, 'forwarded URL').catch(() => false));
 
   // UNC and the policy checks are only meaningful when the event provably arrived and was processed:
   // "nothing was granted" must never be mistaken for "refused".
   const unc = await launchSecond([UNC], 'UNC path');
   const delivered = /second-instance argv=.*unc-refused\.pdf/.test(unc.events);
   check('second-instance event for the UNC path arrived (positive evidence)', delivered, delivered ? '' : 'no event in the test event log');
-  check('second instance: UNC path was refused (no grant)', delivered && !unc.events.includes('granted unc-refused.pdf') && !(await cdp.js('window.__opened.includes("unc-refused.pdf")')), delivered ? '' : 'nothing delivered, refusal not proven');
+  check('second instance: UNC path was refused (no grant)', delivered && !unc.events.includes('granted unc-refused.pdf') && !(await shellHasDoc(cdp, 'unc-refused.pdf')), delivered ? '' : 'nothing delivered, refusal not proven');
   const all = [space, url, unc].map((r) => r.events).join('');
   check('second instance: argv was not rejected by the switch policy (shows what Windows injects)', delivered && !/ignored second launch/.test(all), delivered ? (all.match(/ignored second launch.*/) || [''])[0] : 'nothing delivered, policy not exercised');
 
@@ -162,46 +180,48 @@ async function slashSwitchRefused() {
   killTree(probe.child);
 }
 
-async function main() {
+// Without the marker the packaged app must refuse the test switches (exit 2) and never open a debug port.
+async function refusedWithoutMarker() {
+  const refusalProfile = path.join(work, 'profile-refusal'); // own profile: a stray port file must not leak into the real run
+  const bare = launch([`--user-data-dir=${refusalProfile}`, '--remote-debugging-port=0']);
+  const exited = await until(() => bare.child.exitCode !== null && { code: bare.child.exitCode }, 90000, 'exit').catch(() => ({ code: 'timeout' }));
+  killTree(bare.child);
+  const port = fs.existsSync(path.join(refusalProfile, 'DevToolsActivePort'));
+  check('WITHOUT the marker the test switches are refused (exit 2, no DevToolsActivePort)', exited.code === 2 && !port && (bare.stderr === '' || /unsafe switch/.test(bare.stderr)), `exit=${exited.code} port=${port} ${bare.stderr.slice(0, 160).replace(/\s+/g, ' ')}`);
+}
+
+function writeMarker() {
+  if (fs.existsSync(marker)) throw new Error(`a marker already exists at ${marker}: refusing to run against a tree that is not disposable`);
+  fs.mkdirSync(resources, { recursive: true });
+  fs.writeFileSync(marker, MARKER_CONTENT);
+  let real = '(unresolvable)';
+  try { real = fs.realpathSync.native(resources); } catch { /* reported as is */ }
+  process.stdout.write(`marker written: ${marker} (resources native realpath: ${real})\n`);
+}
+
+function removeMarker() {
+  try { fs.rmSync(marker, { force: true }); } catch (err) { process.stdout.write(`marker removal failed: ${err.message}\n`); }
+  check('the test-mode marker was removed again', !fs.existsSync(marker), marker);
+}
+
+const notVerified = [];
+async function testModeChecks() {
   const first = launch([...testArgs, '--remote-debugging-port=0', pdfA]);
   try {
     const portFile = path.join(profile, 'DevToolsActivePort');
-    const port = await until(() => fs.existsSync(portFile) && fs.readFileSync(portFile, 'utf8').split('\n')[0], 120000, 'DevToolsActivePort');
-    const pageInfo = await until(async () => {
+    const port = await until(() => fs.existsSync(portFile) && fs.readFileSync(portFile, 'utf8').split('\n')[0], 120000, 'DevToolsActivePort').catch((err) => {
+      let real = '(unresolvable)';
+      try { real = fs.realpathSync.native(resources); } catch { /* reported as is */ }
+      throw new Error(`${err.message}; test mode not entered? marker present=${fs.existsSync(marker)} resources=${resources} native realpath=${real} exit=${first.child.exitCode}`);
+    });
+    const findPage = (prefix) => until(async () => {
       const list = await fetch(`http://127.0.0.1:${port}/json`).then((r) => r.json()).catch(() => []);
-      return list.find((t) => t.type === 'page' && t.url.startsWith('bento://app/'));
-    }, 120000, 'a bento://app page');
-    check('window loads bento://app', pageInfo.url.startsWith('bento://app/'), pageInfo.url);
-    const cdp = new Cdp(pageInfo.webSocketDebuggerUrl);
-    await cdp.open();
-
-    const page = await cdp.js(`({
-      isolated: window.crossOriginIsolated,
-      origin: location.origin,
-      external: performance.getEntriesByType('resource').map((e) => e.name).filter((n) => !/^(bento:\\/\\/app\\/|blob:bento:\\/\\/app|data:)/.test(n)),
-      leak: [typeof require, typeof process, typeof module].join(','),
-      bridge: Object.keys(window.bentoDesktop || {}).sort().join(',')
-    })`);
-    check('crossOriginIsolated is true', page.isolated === true);
-    check('no external resource requests', page.external.length === 0 && !/blocked request/.test(first.stderr), JSON.stringify(page.external));
-    check('no Node globals in the page', page.leak === 'undefined,undefined,undefined', page.leak);
-    check('file bridge exposed', /takeOpenedFiles/.test(page.bridge), page.bridge);
-    check('BENTO_DIST/BENTO_TRANSPORT in the environment were ignored (app started on the scheme transport)', page.origin === 'bento://app', page.origin);
-
-    // OS-level sandbox, as reported by Electron's app.getAppMetrics() in test mode.
-    const metricsFile = path.join(profile, 'bento-test-sandbox.json');
-    const metrics = await until(() => fs.existsSync(metricsFile) && JSON.parse(fs.readFileSync(metricsFile, 'utf8')), 30000, 'sandbox metrics').catch(() => []);
-    const tabs = metrics.filter((p) => p.type === 'Tab');
-    check('at least one renderer (Tab) process reported', tabs.length > 0, JSON.stringify(metrics));
-    for (const tab of tabs) check('renderer is sandboxed at a low integrity level', tab.sandboxed === true && ['untrusted', 'low'].includes(tab.integrityLevel), JSON.stringify(tab));
-    check('no --no-sandbox on the launch command', !JSON.stringify(first.child.spawnargs).includes('no-sandbox'));
-
-    const taken = await cdp.js('window.bentoDesktop.takeOpenedFiles()');
-    check('launch-argument PDF delivered through the grant bridge', taken.length === 1 && taken[0].name === 'first.pdf', JSON.stringify(taken));
-    const head = await cdp.js(`window.bentoDesktop.readFile(${JSON.stringify(taken[0] && taken[0].token)}).then((b) => new TextDecoder().decode(b.slice(0, 8)))`);
-    check('granted file is readable via its token', head === '%PDF-1.4', head);
-
-    await secondInstance(cdp);
+      return list.find((t) => t.type === 'page' && t.url.startsWith(prefix));
+    }, 120000, `a ${prefix} page`);
+    const shellCdp = new Cdp((await findPage('bento://shell/')).webSocketDebuggerUrl);
+    await shellCdp.open();
+    if (mode !== 'second-instance-only') await pageChecks(first, findPage, shellCdp);
+    if (mode !== 'no-second-instance') await secondInstance(shellCdp);
   } finally {
     killTree(first.child);
     await wait(1500);
@@ -209,7 +229,59 @@ async function main() {
     process.stdout.write(`test events:\n${readEvents().slice(0, 4000) || '(none)'}\n`);
     dumpTraces();
   }
-  await slashSwitchRefused();
+}
+
+async function pageChecks(first, findPage, shellCdp) {
+  const pageInfo = await findPage('bento://app/');
+  check('window loads bento://app', pageInfo.url.startsWith('bento://app/'), pageInfo.url);
+  const cdp = new Cdp(pageInfo.webSocketDebuggerUrl);
+  await cdp.open();
+  const page = await cdp.js(`({
+    isolated: window.crossOriginIsolated,
+    origin: location.origin,
+    external: performance.getEntriesByType('resource').map((e) => e.name).filter((n) => !/^(bento:\\/\\/app\\/|blob:bento:\\/\\/app|data:)/.test(n)),
+    leak: [typeof require, typeof process, typeof module].join(','),
+    bridge: Object.keys(window.bentoDesktop || {}).sort().join(','),
+    shellBridge: typeof window.bentoShell
+  })`);
+  check('crossOriginIsolated is true', page.isolated === true);
+  check('no external resource requests', page.external.length === 0 && !/blocked request/.test(first.stderr), JSON.stringify(page.external));
+  check('no Node globals in the page', page.leak === 'undefined,undefined,undefined', page.leak);
+  check('file bridge exposed', /takeOpenedFiles/.test(page.bridge), page.bridge);
+  check('tool page has no shell bridge', page.shellBridge === 'undefined', page.shellBridge);
+  check('BENTO_DIST/BENTO_TRANSPORT in the environment were ignored (app started on the scheme transport)', page.origin === 'bento://app', page.origin);
+
+  // OS-level sandbox, as reported by Electron's app.getAppMetrics() in test mode.
+  const metricsFile = path.join(profile, 'bento-test-sandbox.json');
+  const metrics = await until(() => fs.existsSync(metricsFile) && JSON.parse(fs.readFileSync(metricsFile, 'utf8')), 30000, 'sandbox metrics').catch(() => []);
+  const tabs = metrics.filter((p) => p.type === 'Tab');
+  check('at least one renderer (Tab) process reported', tabs.length > 0, JSON.stringify(metrics));
+  for (const tab of tabs) check('renderer is sandboxed at a low integrity level', tab.sandboxed === true && ['untrusted', 'low'].includes(tab.integrityLevel), JSON.stringify(tab));
+  check('no --no-sandbox on the launch command', !JSON.stringify(first.child.spawnargs).includes('no-sandbox'));
+
+  check('launch-argument PDF opened as a document tab (validated into the document store)', await until(() => shellHasDoc(shellCdp, 'first.pdf'), 20000, 'first.pdf tab').catch(() => false));
+  const shellFacts = await shellCdp.js(`({ origin: location.origin, ready: document.body.dataset.ready, tools: document.querySelectorAll('#tools button').length })`);
+  check('shell UI served from the packaged asar (bento://shell, ready, tool list rendered)', shellFacts.origin === 'bento://shell' && shellFacts.ready === 'true' && shellFacts.tools > 100, JSON.stringify(shellFacts));
+}
+
+async function main() {
+  process.stdout.write(`packaged smoke: ${exe} mode=${mode}${portable ? ' (portable)' : ''} marker=${portable ? '(none: portable)' : marker}\n`);
+  if (mode !== 'second-instance-only') await refusedWithoutMarker();
+  if (portable) {
+    const groups = { 'no-second-instance': ['page checks in test mode (isolation, no external requests, no Node globals, sandbox level, open-with document tab, shell UI)'],
+      'second-instance-only': ['second-instance forwarding (issue #11)'] };
+    notVerified.push(...(groups[mode] || [...groups['no-second-instance'], ...groups['second-instance-only']]).map((g) => `portable: ${g}: the stub wipes its extraction directory before every launch, so the test-mode marker cannot be placed`));
+    // Nothing that needs test mode was run: second-instance-only has no check of its own left, which must not read as a pass.
+    if (mode === 'second-instance-only') check('portable second instance could be exercised', false, 'NOT VERIFIED: no test mode in the portable exe');
+  } else {
+    writeMarker();
+    try {
+      await testModeChecks();
+    } finally {
+      removeMarker();
+    }
+  }
+  if (mode !== 'second-instance-only') await slashSwitchRefused();
 }
 
 main()
@@ -217,6 +289,7 @@ main()
   .finally(() => {
     try { fs.rmSync(work, { recursive: true, force: true }); } catch { /* profile still locked: the runner is discarded anyway */ }
     const failed = results.filter((r) => !r.ok).length;
-    process.stdout.write(`${results.length - failed}/${results.length} checks passed\n`);
+    for (const what of notVerified) process.stdout.write(`NOT VERIFIED ${what}\n`);
+    process.stdout.write(`${results.length - failed}/${results.length} checks passed${notVerified.length ? `, ${notVerified.length} group(s) NOT VERIFIED` : ''}\n`);
     process.exit(failed ? 1 : 0);
   });

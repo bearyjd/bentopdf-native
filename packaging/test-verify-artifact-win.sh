@@ -129,6 +129,7 @@ m_marker_upper_root() { printf 'bento-test-mode-v1\n' > "$1/.BENTO-TEST-MODE"; }
 m_no_slash_switch_rule() { edit_asar "$1" "s/platform === 'win32' \&\& arg.startsWith('\/')/false \/\/ MUTATED/" src/argv-policy.js; }
 m_no_windows_path_rules() { edit_asar "$1" 's/windowsPathProblem/wpp_MUTATED/g' src/open-file.js; }
 m_no_static_rules() { edit_asar "$1" 's/isWindowsUnsafeSegment/iwus_MUTATED/g' src/static-files.js; }
+m_shell_js_realpath() { edit_asar "$1" 's/fs.realpathSync.native(distDir)/fs.realpathSync(distDir) \/\/ MUTATED/' src/shell/shell-app.js; }
 m_js_realpath() { edit_asar "$1" 's/realpathSync.native/realpathSync \/\/ MUTATED/' src/app.js; }
 m_second_instance_unchecked() { edit_asar "$1" 's/unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true })/[] \/\/ MUTATED/' src/main.js; }
 m_no_sandbox_lnk() { printf -- '--no-sandbox' | iconv -f utf-8 -t utf-16le > "$1/shortcut.lnk"; }
@@ -179,6 +180,7 @@ attempt "/switch no longer a switch on win32" m_no_slash_switch_rule
 attempt "Windows open-with path rules removed" m_no_windows_path_rules
 attempt "Windows static path rules removed" m_no_static_rules
 attempt "bundle root not canonicalised natively" m_js_realpath
+attempt "shell bundle root not canonicalised natively" m_shell_js_realpath
 attempt "second-instance argv unchecked" m_second_instance_unchecked
 attempt "--no-sandbox in a UTF-16 .lnk shortcut" m_no_sandbox_lnk
 attempt "--no-sandbox in a .bat launcher" m_no_sandbox_bat
