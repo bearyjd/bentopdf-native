@@ -103,3 +103,16 @@ test('dialogs: openFile and saveFile are refused for a sender that is not allowe
   await assert.rejects(Promise.resolve().then(() => h.call(CHANNELS.saveFile, 2, 'a.pdf', new Uint8Array(1))), /only available to the active tab/);
   assert.deepEqual(h.opened, ['open', 'save'], 'no dialog was opened for the refused sender');
 });
+
+test('sanitizeText: page-originated text is capped and loses control and bidi characters', () => {
+  const { sanitizeText, MAX_TEXT } = require('../src/shell/bounded');
+  assert.equal(MAX_TEXT, 300);
+  assert.equal(sanitizeText('a\nb\r\nc\td\u0000e\u001b[31mf\u007fg\u0085h i‮j'), 'a b c d e [31mf g h i j');
+  assert.equal(sanitizeText('x'.repeat(5000)).length, 300);
+  assert.ok(sanitizeText('x'.repeat(5000)).endsWith('…'));
+  assert.equal(sanitizeText('y'.repeat(300)), 'y'.repeat(300));
+  assert.equal(sanitizeText(undefined), '');
+  assert.equal(sanitizeText(null), '');
+  assert.equal(sanitizeText({ toString: () => 'obj\nline' }), 'obj line');
+  assert.equal(sanitizeText('  padded  '), 'padded');
+});

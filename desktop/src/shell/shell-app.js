@@ -14,7 +14,8 @@ const { buildToolRegistry } = require('./tool-registry');
 const { createTabManager } = require('./tab-manager');
 const { createViewAdapter } = require('./tab-views');
 const { prepareSession, releaseSession, SHELL_HEADERS, SHELL_HOST } = require('./sessions');
-const { pushCapped, addCapped, createLogLimiter, serialByKey } = require('./bounded');
+const { pushCapped, addCapped, createLogLimiter, sanitizeText } = require('./bounded');
+const { createDocumentOpener } = require('./open-document');
 const { isPermanentOpenFailure } = require('./recents');
 const { registerShellIpc } = require('./shell-ipc');
 const { SHELL_CHANNELS } = require('./shell-channels');
@@ -155,8 +156,9 @@ async function startShell(options) {
       pushCapped(handoffs, Object.freeze({ tabId: tab.id, toolId: tab.toolId, docId: doc.id, count }));
       setStatus(tab.id, null);
     } catch (err) {
-      log(`handoff ${doc.name} -> ${tab.toolId} (tab ${tab.id}): ${err.message}`);
-      if (latest()) setStatus(tab.id, { kind: 'error', text: `Could not open ${doc.name} in ${toolName}: ${err.message}` });
+      const reason = sanitizeText(err && err.message); // page-originated text: capped, no control characters
+      logLimited(tab.partition, `handoff ${sanitizeText(doc.name)} -> ${tab.toolId} (tab ${tab.id}): ${reason}`);
+      if (latest()) setStatus(tab.id, { kind: 'error', text: sanitizeText(`Could not open ${doc.name} in ${toolName}: ${reason}`) });
     }
   }
 
@@ -202,21 +204,9 @@ async function startShell(options) {
     onError: (err, tab) => log(`tab ${tab.id}: ${err.message}`),
   });
 
-  /** A path from the OS, a dialog or recents: validated by the store, then shown in a tab. */
-  async function openNow(filePath) {
-    const doc = await store.addFromPath(filePath);
-    recents.add(store.get(doc.id).filePath);
-    const existing = tabs.list().find((t) => t.docId === doc.id);
-    if (existing) await tabs.activate(existing.id);
-    else await tabs.open({ docId: doc.id });
-    pushState();
-    return doc;
-  }
-  // One open at a time per path: concurrent opens of the same file end in one document and one tab.
-  const openDocument = (() => {
-    const serial = serialByKey((filePath) => openNow(filePath));
-    return (filePath) => serial(String(filePath));
-  })();
+  // A path from the OS, a dialog or recents: validated by the store, then shown in a tab. One open at a
+  // time per path: concurrent opens of the same file end in one document and one tab.
+  const openDocument = createDocumentOpener({ store, recents, tabs, pushState });
 
   /** Remove a document nothing shows any more (its last tab closed or navigated away). */
   const releaseDocument = (docId) => {

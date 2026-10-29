@@ -8,11 +8,20 @@ const MAX_OPEN_ARGS = 16;
 const MAX_PATH_LENGTH = 4096;
 
 /**
- * UNC / network-share prefixes (`\\host\share`, `//host/share`, `\\?\UNC\...`). Refused on
- * every platform: reading one can leak credentials (NTLM) or hang on a dead server, and POSIX
- * treats a leading `//` as an ordinary path that other code would normalise away.
+ * UNC / network-share prefixes (`\\host\share`, `//host/share`, `\\.\pipe\x`, `\\?\UNC\...`, `smb:`,
+ * `file://host/share`). Refused on every platform: reading one can leak credentials (NTLM) or hang
+ * on a dead server, and POSIX treats a leading `//` as an ordinary path that other code would
+ * normalise away. The one `\\?\` form that is allowed is the long-path prefix of a local drive
+ * (`\\?\C:\...`): after the prefix is stripped the real target must be a drive letter, anything else
+ * (`UNC\...`, `Volume{...}`, `GLOBALROOT`, a further `\\`) resolves to something other than a local file.
  */
-const hasNetworkPrefix = (value) => typeof value === 'string' && /^[\\/]{2}/.test(value);
+function hasNetworkPrefix(value) {
+  if (typeof value !== 'string') return false;
+  if (/^smb:/i.test(value) || /^file:[\\/]{2}(?![\\/]|localhost[\\/])/i.test(value)) return true;
+  if (!/^[\\/]{2}/.test(value)) return false;
+  const longPath = /^[\\/]{2}\?[\\/]([\s\S]*)$/.exec(value);
+  return longPath === null || !/^[A-Za-z]:([\\/]|$)/.test(longPath[1]);
+}
 
 function localPathOfFileUrl(url) {
   try {
@@ -52,18 +61,18 @@ const PDF_MAGIC = Buffer.from('%PDF-');
 const hasPdfMagic = (bytes) => bytes.length >= PDF_MAGIC.length && Buffer.from(bytes.buffer, bytes.byteOffset, PDF_MAGIC.length).equals(PDF_MAGIC);
 
 /**
- * The file must be a `.pdf` name that resolves (symlinks followed) to a regular
- * file within `maxBytes` whose first bytes are `%PDF-`. Checked on an open
- * handle so a swap after the check cannot change what was measured. The caller
- * stores the returned `dev`/`ino` in the grant; readRegularFile compares them
- * with the handle it opens at read time and repeats the `%PDF-` check, so a
- * path swapped for another file between grant and read is refused. The returned
- * `filePath` is the resolved path: a symlink named x.pdf that points at a secret
- * is refused by the magic-byte check, and the grant never names the link.
+ * The one validator behind every path that becomes a document or a grant (OS open, recents, the
+ * native open dialog): no network prefix, no NUL, absolute, resolves (symlinks followed; the
+ * target is checked for a network prefix again) to a regular file within `maxBytes`, opened
+ * O_NOFOLLOW and measured on that handle so a swap after the check cannot change what was
+ * measured. With `pdf` the name must end in `.pdf` and the first bytes must be `%PDF-`.
+ * Returns the resolved `filePath` plus `dev`/`ino`; the caller stores them in the grant and
+ * readRegularFile compares them with the handle it opens at read time.
  */
-async function validateOpenPath(filePath, maxBytes) {
+async function validateLocalFile(filePath, maxBytes, { pdf = false } = {}) {
+  if (typeof filePath !== 'string' || filePath.length === 0 || filePath.includes('\0')) throw new Error('not a usable path');
   if (hasNetworkPrefix(filePath)) throw new Error('network paths are not allowed');
-  if (path.extname(filePath).toLowerCase() !== '.pdf') throw new Error('not a .pdf file');
+  if (pdf && path.extname(filePath).toLowerCase() !== '.pdf') throw new Error('not a .pdf file');
   const resolved = await fs.promises.realpath(filePath);
   if (hasNetworkPrefix(resolved)) throw new Error('network paths are not allowed');
   const handle = await fs.promises.open(resolved, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
@@ -71,13 +80,18 @@ async function validateOpenPath(filePath, maxBytes) {
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error('not a regular file');
     if (stat.size > maxBytes) throw new Error('file too large');
-    const head = Buffer.alloc(PDF_MAGIC.length);
-    const { bytesRead } = await handle.read(head, 0, head.length, 0);
-    if (bytesRead < head.length || !head.equals(PDF_MAGIC)) throw new Error('not a PDF (missing %PDF- header)');
+    if (pdf) {
+      const head = Buffer.alloc(PDF_MAGIC.length);
+      const { bytesRead } = await handle.read(head, 0, head.length, 0);
+      if (bytesRead < head.length || !head.equals(PDF_MAGIC)) throw new Error('not a PDF (missing %PDF- header)');
+    }
     return { size: stat.size, filePath: resolved, dev: stat.dev, ino: stat.ino };
   } finally {
     await handle.close();
   }
 }
 
-module.exports = { pdfPathsFromArgv, validateOpenPath, hasPdfMagic, hasNetworkPrefix, MAX_OPEN_ARGS };
+/** A document: `validateLocalFile` with the `.pdf` name and `%PDF-` header required. */
+const validateOpenPath = (filePath, maxBytes) => validateLocalFile(filePath, maxBytes, { pdf: true });
+
+module.exports = { pdfPathsFromArgv, validateOpenPath, validateLocalFile, hasPdfMagic, hasNetworkPrefix, MAX_OPEN_ARGS };

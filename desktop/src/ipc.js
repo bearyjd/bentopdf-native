@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { CHANNELS } = require('./channels');
-const { validateOpenPath, hasPdfMagic } = require('./open-file');
+const { validateOpenPath, validateLocalFile, hasPdfMagic } = require('./open-file');
 
 const MAX_BYTES = 512 * 1024 * 1024;
 const GRANT_TTL_MS = 10 * 60 * 1000;
@@ -104,11 +104,10 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now, canU
   };
   const grantsFor = (event) => tableFor(event.sender);
 
-  const issue = (table, filePath, size, identity = {}) => {
+  const issue = (table, filePath, size, identity = {}, name = path.basename(filePath)) => {
     for (const [token, grant] of table) if (grant.expires <= now()) table.delete(token);
     while (table.size >= MAX_GRANTS_PER_WINDOW) table.delete(table.keys().next().value);
     const token = crypto.randomUUID();
-    const name = path.basename(filePath);
     table.set(token, { filePath, name, size, expires: now() + GRANT_TTL_MS, ...identity });
     return { token, name, size };
   };
@@ -125,8 +124,12 @@ function registerIpc({ ipcMain, origin, dialogs, getWindow, now = Date.now, canU
     const table = grantsFor(event);
     const result = [];
     for (const filePath of picked.filePaths) {
-      const stat = await fs.promises.stat(filePath);
-      if (stat.isFile()) result.push(issue(table, filePath, stat.size, { dev: stat.dev, ino: stat.ino }));
+      // The user may have switched tabs while the dialog was open: only the active tab gets a grant.
+      if (!canUseDialogs(event.sender)) throw new Error('the tab is no longer active; no file was opened');
+      const checked = await validateLocalFile(filePath, MAX_BYTES); // same validator as every other path; a refusal rejects the call
+      // The awaits above are another chance to lose the active tab.
+      if (!canUseDialogs(event.sender)) throw new Error('the tab is no longer active; no file was opened');
+      result.push(issue(table, checked.filePath, checked.size, { dev: checked.dev, ino: checked.ino, nofollow: true }, path.basename(filePath)));
     }
     return result;
   });

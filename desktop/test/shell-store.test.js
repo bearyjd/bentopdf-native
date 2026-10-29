@@ -184,7 +184,7 @@ test('store: touch moves a document to the front of the most-recently-used order
 
 test('network paths (UNC and //host) are refused by the store and recents on every platform', async () => {
   const store = createDocumentStore({ validate: async () => assert.fail('must be refused before validation') });
-  for (const p of ['\\\\server\\share\\a.pdf', '//server/share/a.pdf', '\\\\?\\UNC\\server\\share\\a.pdf', '/\\server/a.pdf']) {
+  for (const p of ['\\\\server\\share\\a.pdf', '//server/share/a.pdf', '\\\\?\\UNC\\server\\share\\a.pdf', '/\\server/a.pdf', '\\\\.\\pipe\\x.pdf', '//./pipe/x.pdf', '//?/UNC/server/share/a.pdf', 'smb://server/share/a.pdf', 'file://server/share/a.pdf']) {
     await assert.rejects(store.addFromPath(p), /network paths/, p);
     assert.equal(isPlausiblePath(p), false, p);
   }

@@ -43,6 +43,17 @@ function createLogLimiter({ limit = 20, windowMs = 60000, now = Date.now, maxKey
   };
 }
 
+const MAX_TEXT = 300;
+// C0/C1 controls, DEL, line/paragraph separators and bidi overrides/isolates: no line breaks in logs, no spoofed status text.
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g;
+
+/** Text that came from a page, made safe for the status line, state pushes and log lines: controls become a space, length capped. */
+function sanitizeText(value, max = MAX_TEXT) {
+  const text = String(value ?? '').replace(UNSAFE_TEXT, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}\u2026` : text;
+}
+
 /**
  * Run `task(key)` calls one after another per key; different keys run
  * concurrently. A rejection reaches its own caller only.
@@ -60,4 +71,4 @@ function serialByKey(task) {
   };
 }
 
-module.exports = { pushCapped, addCapped, createLogLimiter, serialByKey, DEFAULT_CAP };
+module.exports = { pushCapped, addCapped, createLogLimiter, serialByKey, sanitizeText, MAX_TEXT, DEFAULT_CAP };
