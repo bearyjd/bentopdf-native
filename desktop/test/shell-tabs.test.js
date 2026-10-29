@@ -124,3 +124,15 @@ test('tabs: a failing load is reported, not thrown, and skips the handoff', asyn
   assert.deepEqual(errors, ['ERR_FAILED']);
   assert.equal(handoffs, 0);
 });
+
+test('tabs: in-page navigation is remembered so a discarded tab reloads where the user was', async () => {
+  const v = fakeViews();
+  const tm = createTabManager({ views: v.adapter, maxLive: 1 });
+  await tm.open({ docId: 'd' });
+  tm.recordPage(1, '/split-pdf', 'split-pdf');
+  tm.recordPage(99, '/x', null); // unknown tab: ignored
+  assert.deepEqual([tm.get(1).page, tm.get(1).toolId, tm.get(1).docId], ['/split-pdf', 'split-pdf', 'd']);
+  await tm.open();
+  await tm.activate(1);
+  assert.deepEqual(tm.viewOf(1).loads, ['/split-pdf']);
+});
