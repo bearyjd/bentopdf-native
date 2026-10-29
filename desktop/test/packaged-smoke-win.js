@@ -21,6 +21,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const { MARKER_NAME, MARKER_CONTENT } = require('../src/test-mode');
+const { classifyPortableSecondInstance, EXIT_KNOWN_ISSUE_11 } = require('./portable-outcome');
 
 const exe = process.argv[2];
 const opt = (name, fallback) => { const i = process.argv.indexOf(name); return i > 2 ? process.argv[i + 1] : fallback; };
@@ -264,6 +265,32 @@ async function pageChecks(first, findPage, shellCdp) {
   check('shell UI served from the packaged asar (bento://shell, ready, tool list rendered)', shellFacts.origin === 'bento://shell' && shellFacts.ready === 'true' && shellFacts.tools > 100, JSON.stringify(shellFacts));
 }
 
+// Portable exe, second instance (issue #11). No test mode, so only process facts can be observed: is the first
+// instance still running, and what did the second launch do. portable-outcome.js maps that to the exit code:
+// 3 = the known #11 signature ONLY, 1 = anything else.
+let knownIssueExit = null;
+async function portableSecondInstance() {
+  const first = launch([pdfA], { testMode: false });
+  await wait(10000);
+  const firstAlive = first.child.exitCode === null;
+  let secondExit = 'not launched';
+  if (firstAlive) {
+    const second = launch([pdfB], { testMode: false });
+    secondExit = (await until(() => second.child.exitCode !== null && { code: second.child.exitCode }, 30000, 'second instance exit').catch(() => ({ code: 'timeout' }))).code;
+    if (secondExit === 'timeout') describeProcesses();
+    killTree(second.child);
+  }
+  process.stdout.write(`portable launch: firstAlive=${firstAlive} secondExit=${secondExit} first exit=${first.child.exitCode} stderr=${first.stderr.slice(0, 160).replace(/\s+/g, ' ')}\n`);
+  killTree(first.child);
+  const verdict = classifyPortableSecondInstance({ firstAlive, secondExit });
+  if (verdict.known) {
+    process.stdout.write(`KNOWN FAILURE #11: ${verdict.reason}\n`);
+    knownIssueExit = verdict.code;
+  } else {
+    check('portable second instance: failure is not the known #11 signature', false, verdict.reason);
+  }
+}
+
 async function main() {
   process.stdout.write(`packaged smoke: ${exe} mode=${mode}${portable ? ' (portable)' : ''} marker=${portable ? '(none: portable)' : marker}\n`);
   if (mode !== 'second-instance-only') await refusedWithoutMarker();
@@ -271,8 +298,8 @@ async function main() {
     const groups = { 'no-second-instance': ['page checks in test mode (isolation, no external requests, no Node globals, sandbox level, open-with document tab, shell UI)'],
       'second-instance-only': ['second-instance forwarding (issue #11)'] };
     notVerified.push(...(groups[mode] || [...groups['no-second-instance'], ...groups['second-instance-only']]).map((g) => `portable: ${g}: the stub wipes its extraction directory before every launch, so the test-mode marker cannot be placed`));
-    // Nothing that needs test mode was run: second-instance-only has no check of its own left, which must not read as a pass.
-    if (mode === 'second-instance-only') check('portable second instance could be exercised', false, 'NOT VERIFIED: no test mode in the portable exe');
+    // Forwarding itself can never be observed here (no test mode), so this mode can only end in 3 (known) or 1.
+    if (mode === 'second-instance-only') await portableSecondInstance();
   } else {
     writeMarker();
     try {
@@ -291,5 +318,5 @@ main()
     const failed = results.filter((r) => !r.ok).length;
     for (const what of notVerified) process.stdout.write(`NOT VERIFIED ${what}\n`);
     process.stdout.write(`${results.length - failed}/${results.length} checks passed${notVerified.length ? `, ${notVerified.length} group(s) NOT VERIFIED` : ''}\n`);
-    process.exit(failed ? 1 : 0);
+    process.exit(failed ? 1 : (knownIssueExit === EXIT_KNOWN_ISSUE_11 ? EXIT_KNOWN_ISSUE_11 : 0));
   });
