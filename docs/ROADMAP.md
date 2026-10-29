@@ -178,6 +178,12 @@ Final fix round (each mutation applied alone to the worktree files, then restore
 | LibreOffice marker removed from `weightOfPage` | RED: shell-tabs unit (5 failures, incl. the dist cross-check) |
 | Packaged build honours `BENTO_TEST_HEADLESS` | RED: argv-policy unit |
 | AppRun / launcher stops unsetting `BENTO_TEST_HEADLESS` | RED: argv-policy unit; gate logic (`check_unset`) fails on a mutated AppRun (simulated; no artifact built) |
+| Policy honours the test switches in a packaged build without the marker (env alone / marker check removed) | RED: argv-policy unit (both variants) |
+| Marker accepted as a symlink / foreign owner / group-world-writable / any content | RED: test-mode unit (4 mutations; the redundant `isFile` check is covered by the size check, a mutation of it alone stays green) |
+| Hash-only navigation: dropped handoff leaves 'Loading...' | RED: e2e shellHandoffHashNav |
+| Epoch guard removed / URL re-check removed | RED: e2e shellHandoffReload / shellHandoffUrlChanged; shellHandoffNavigated stays green under either one alone (the other guard catches it) |
+| Blocked-request URL / unsafe switches logged raw | RED: e2e shellBlockedUrlLog / main-entry |
+| releaseDocument without the post-await re-check | RED: shell-open-document unit (2) |
 | `hasNetworkPrefix` ignores `\\.\...` | RED: open-file + shell-store unit |
 | `hasNetworkPrefix` rejects `\\?\C:\...` again / allows `\\?\UNC\...` | RED: open-file unit / open-file + shell-store unit |
 | Dialog grants back to a bare `stat` | RED: ipc unit |

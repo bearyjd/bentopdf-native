@@ -257,10 +257,9 @@ WebContents has focus. macOS gets the `appMenu` role; `CmdOrCtrl` maps to Cmd.
 
 ## Not verified
 
-- The packaged smoke test (`test/packaged-smoke.js`) drives the artifact through
-  `--remote-debugging-port`, which a packaged build now refuses even with
-  `BENTO_TEST_HEADLESS=1` (the variable is only honoured unpackaged and the
-  launchers unset it). It has NOT been re-run or adapted since that change.
+- The packaged smoke test (`test/packaged-smoke.js`) runs only against a disposable extracted copy of
+  an AppImage with the test-mode marker (docs/desktop-linux.md, "Packaged test mode"). Flatpak, deb
+  and rpm are not smoke-tested. Follow-up: drive the packaged build over `--remote-debugging-pipe`.
 - A visible window: the shell has only ever run headless. Layout, focus,
   keyboard shortcuts (accelerators are only unit-tested as data) and menus
   were never seen or pressed. **The window is still unseen.**

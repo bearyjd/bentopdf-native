@@ -27,7 +27,7 @@ packaging/verify-artifact.sh desktop/release/<artifact>   # release gate, one ru
 packaging/verify-artifact.sh packaging/flatpak/.build/app   # the same gate on the Flatpak build tree
 packaging/test-verify-artifact.sh   # mutation test of the gate itself (see Gate integrity)
 cd desktop && npm run test:fuses -- release/linux-unpacked/bentopdf-native
-cd desktop && npm run test:packaged -- release/<file>.AppImage   # headless smoke test, never opens a window
+cd desktop && npm run test:packaged -- release/<file>.AppImage   # headless smoke test of a disposable extracted COPY (AppImage only), never opens a window
 packaging/flatpak/build-flatpak.sh   # Flatpak bundle, user scope (see Flatpak below)
 ```
 
@@ -113,13 +113,13 @@ Why not inside the asar:
 
 Evidence in the artifact: `packaging/verify-artifact.sh` asserts
 `resources/dist/index.html` exists, `app.asar` is < 5 MB, and the headless
-smoke test loads `bento://app/index.html` from the AppImage with
+smoke test loads `bento://app/index.html` from an extracted copy of the AppImage with
 `BENTO_DIST=/nonexistent` set.
 
 `BENTO_DIST` / `BENTO_TRANSPORT` resolve to `process.resourcesPath/dist` and
 `scheme` when packaged; the environment overrides are not read at all when
 `app.isPackaged` (`src/main.js`). Proof is dynamic (smoke test launches the
-AppImage and the Flatpak with `BENTO_DIST=/nonexistent BENTO_TRANSPORT=carrier-pigeon`: it
+extracted AppImage copy, not the Flatpak any more (see "Packaged test mode"), with `BENTO_DIST=/nonexistent BENTO_TRANSPORT=carrier-pigeon`: it
 still starts on `bento://app`; unpackaged, the same value exits with code 2) and
 static (the gate greps the extracted `main.js` for the guard and rejects any
 other `process.env` read).
@@ -159,12 +159,33 @@ like their double-dash forms. Matching is case-sensitive and exact, so `-no-sand
 `--proxy-server`, `--allow-file-access-from-files`, `--enable-features=`/`--disable-features=`,
 `--disable-blink-features` and the rest are all refused (unit-tested). A bare `--` ends the options:
 what follows is a file argument and still goes through the open-with validation. Only when
-`BENTO_TEST_HEADLESS=1` is in the environment **of an unpackaged run** (main.js passes
-`app.isPackaged ? {} : process.env` to the policy; a packaged build ignores the variable, and
-the AppRun and Flatpak launcher unset it together with `BENTO_DIST` and `BENTO_TRANSPORT`) are
-`--ozone-platform=headless`, `--remote-debugging-port=<n>`, `--remote-debugging-pipe` and
-`--user-data-dir=<dir>` also accepted; that is how the unpackaged test harness drives Electron. (The packaged smoke test used this
-to drive the artifact; it can no longer, see docs/shell.md "Not verified".)
+`BENTO_TEST_HEADLESS=1` is in the environment **and** (for a packaged build) the test-mode marker exists
+(next section) are `--ozone-platform=headless`, `--remote-debugging-port=<n>`,
+`--remote-debugging-pipe` and `--user-data-dir=<dir>` also accepted; that is how the test harnesses drive
+Electron. The AppRun and Flatpak launcher unset `BENTO_TEST_HEADLESS`, `BENTO_DIST` and `BENTO_TRANSPORT`
+for every normal launch.
+
+### Packaged test mode (marker file)
+
+PR #8 made packaged builds ignore `BENTO_TEST_HEADLESS`, which broke the packaged smoke test. It now
+works like this: a packaged build honours test mode only if **both** the environment variable is `1`
+**and** `<process.resourcesPath>/.bento-test-mode` is a regular file (opened with `O_NOFOLLOW`, so a
+symlink fails), owned by the current user, not group/world-writable, whose content is exactly
+`bento-test-mode-v1\n` (`src/test-mode.js`, unit-tested: absent, symlink, directory, world/group
+writable, foreign owner, wrong content). `test/packaged-smoke.js` extracts the AppImage
+(`--appimage-extract`) into a temp directory, creates the marker **in that copy only**, runs the extracted
+binary directly with the env, and removes the copy. It also checks, on the same copy, that (1) without
+the marker the binary refuses `--remote-debugging-port` (exit 2) and (2) with the marker but started
+through the extracted `AppRun`, the launcher still scrubs the env and refuses. `verify-artifact.sh`
+FAILS if `.bento-test-mode` exists anywhere in an artifact (mutation cases in
+`test-verify-artifact.sh`). Flatpak and deb/rpm are not smoke-tested any more.
+
+Honest limits: this is a tripwire plus a gate, not a boundary. Chromium parses the debug-port switch
+before any JavaScript runs, so a marker-less packaged build started with the switch still opens the
+port until `main.js` exits 2 moments later; the marker only decides whether our own argv policy lets it
+continue. Anyone who can write into the install tree (root) can already do anything. The reviewer's safer
+alternative, **follow-up**: drive the packaged build over `--remote-debugging-pipe` (no TCP port, no
+marker, no env switch) from a parent process that owns the pipe.
 Electron itself adds `--allow-file-access-from-files` to the argv it reports for a second instance
 (found by the packaged smoke test; measured on Electron 45.1.0; the first launch's `process.argv` does
 not have it), so that one switch is accepted in second-instance argv only; it cannot affect the running
