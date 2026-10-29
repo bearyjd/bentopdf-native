@@ -108,24 +108,57 @@ try {
   // Any host: the shipped win32 branch against a fake fs (one valid case, then one bad fact at a time).
   const winRes = 'C:\\BentoPDF\\resources';
   const winMarker = `${winRes}\\${MARKER_NAME}`;
+  // File ids and sizes are BIGINT on win32 (the shipped branch asks for {bigint:true}); overrides must be bigint too.
   const fakeWin = ({ resReal = winRes, markerReal = winMarker, lstat = {}, fstat = {}, token = MARKER_CONTENT } = {}) => {
-    const st = { isFile: () => true, isSymbolicLink: () => false, dev: 1, ino: 2, nlink: 1, size: MARKER_CONTENT.length };
+    const st = { isFile: () => true, isSymbolicLink: () => false, dev: 1n, ino: 2n ** 60n, nlink: 1n, size: BigInt(MARKER_CONTENT.length) };
+    const fold = (q) => q.toLowerCase();
     const realpathSync = () => { throw new Error('win32 branch must use realpathSync.native'); };
-    realpathSync.native = (q) => (q === winRes ? resReal : q === `${resReal}\\${MARKER_NAME}` ? markerReal : q);
+    realpathSync.native = (q) => (fold(q) === fold(winRes) ? resReal : fold(q) === fold(`${resReal}\\${MARKER_NAME}`) ? markerReal : q);
     return {
       constants: { O_RDONLY: 0 }, realpathSync, closeSync: () => {}, openSync: () => 3,
       lstatSync: () => ({ ...st, ...lstat }), fstatSync: () => ({ ...st, ...fstat }), readSync: (_fd, b) => b.write(token),
     };
   };
-  const win = (f) => hasTestMarker(winRes, { fsImpl: f, platform: 'win32' });
+  const win = (f, res = winRes) => hasTestMarker(res, { fsImpl: f, platform: 'win32' });
   expect('win32 branch: valid marker (fake fs)', win(fakeWin()), true);
+  expect('win32 branch: path compare is case-insensitive (resources spelled in upper case)', win(fakeWin(), winRes.toUpperCase()), true);
+  expect('win32 branch: path compare is case-insensitive (marker real path in lower case)', win(fakeWin({ markerReal: winMarker.toLowerCase() })), true);
   expect('win32 branch: resources through a junction (fake fs)', win(fakeWin({ resReal: 'D:\\x\\resources', markerReal: `D:\\x\\resources\\${MARKER_NAME}` })), false);
   expect('win32 branch: symlinked marker (fake fs)', win(fakeWin({ lstat: { isSymbolicLink: () => true } })), false);
   expect('win32 branch: marker redirected by a reparse point (fake fs)', win(fakeWin({ markerReal: 'D:\\y\\m' })), false);
-  expect('win32 branch: handle is not the lstat\'ed file (fake fs)', win(fakeWin({ fstat: { ino: 9 } })), false);
-  expect('win32 branch: hard-linked marker (fake fs)', win(fakeWin({ fstat: { nlink: 2 } })), false);
-  expect('win32 branch: wrong size (fake fs)', win(fakeWin({ fstat: { size: MARKER_CONTENT.length + 1 } })), false);
+  expect('win32 branch: handle has another file id (ino) than the lstat\'ed file (fake fs)', win(fakeWin({ fstat: { ino: 9n } })), false);
+  expect('win32 branch: ids differing only beyond 2^53 are different (fake fs)', win(fakeWin({ fstat: { ino: 2n ** 60n + 1n } })), false);
+  expect('win32 branch: handle is on another volume (dev) than the lstat\'ed file (fake fs)', win(fakeWin({ fstat: { dev: 9n } })), false);
+  expect('win32 branch: handle is not a file (fake fs)', win(fakeWin({ fstat: { isFile: () => false } })), false);
+  expect('win32 branch: hard-linked marker (fake fs)', win(fakeWin({ fstat: { nlink: 2n } })), false);
+  expect('win32 branch: size larger (fake fs)', win(fakeWin({ fstat: { size: BigInt(MARKER_CONTENT.length + 1) } })), false);
+  expect('win32 branch: size smaller (fake fs)', win(fakeWin({ fstat: { size: 0n } })), false);
   expect('win32 branch: another token (fake fs)', win(fakeWin({ token: MARKER_CONTENT.replace('v1', 'v2') })), false);
+
+  // Any host: the shipped POSIX branch against a fake fs, because real files cannot isolate size or isFile.
+  const UID = 1000;
+  const fakePosix = (over = {}, token = MARKER_CONTENT) => {
+    const st = { isFile: () => true, nlink: 1, uid: UID, mode: 0o100644, size: MARKER_CONTENT.length, ...over };
+    return { constants: { O_RDONLY: 0, O_NOFOLLOW: 0x20000 }, realpathSync: (q) => path.resolve(q), openSync: () => 3, fstatSync: () => st, readSync: (_fd, b) => b.write(token), closeSync: () => {} };
+  };
+  const posix = (f) => hasTestMarker('/opt/app/resources', { fsImpl: f, uid: UID, platform: 'linux' });
+  expect('posix branch: valid marker (fake fs)', posix(fakePosix()), true);
+  expect('posix branch: not a regular file (fake fs)', posix(fakePosix({ isFile: () => false })), false);
+  expect('posix branch: hard link (fake fs)', posix(fakePosix({ nlink: 2 })), false);
+  expect('posix branch: foreign owner (fake fs)', posix(fakePosix({ uid: UID + 1 })), false);
+  expect('posix branch: group-writable (fake fs)', posix(fakePosix({ mode: 0o100664 })), false);
+  expect('posix branch: world-writable (fake fs)', posix(fakePosix({ mode: 0o100602 })), false);
+  expect('posix branch: size larger (fake fs)', posix(fakePosix({ size: MARKER_CONTENT.length + 1 })), false);
+  expect('posix branch: size smaller (fake fs)', posix(fakePosix({ size: 0 })), false);
+  expect('posix branch: another token (fake fs)', posix(fakePosix({}, MARKER_CONTENT.replace('v1', 'v2'))), false);
+
+  // Argv policy: a leading "/" is a switch on win32 ONLY (rule dropped -> /no-sandbox slips through; rule widened -> POSIX paths refused).
+  expect('argv policy: /no-sandbox is refused on win32', unsafeSwitches(['exe', '/no-sandbox'], {}, { platform: 'win32' }).length, 1);
+  expect('argv policy: /remote-debugging-port=0 is refused on win32', unsafeSwitches(['exe', '/remote-debugging-port=0'], {}, { platform: 'win32' }).length, 1);
+  expect('argv policy: a POSIX path is not a switch on linux', unsafeSwitches(['exe', '/home/u/x.pdf'], {}, { platform: 'linux' }).length, 0);
+  expect('argv policy: a POSIX path is not a switch on darwin', unsafeSwitches(['exe', '/Users/u/x.pdf'], {}, { platform: 'darwin' }).length, 0);
+  expect('argv policy: a drive path is not a switch on win32', unsafeSwitches(['exe', 'C:\\u\\x.pdf', 'plain.pdf'], {}, { platform: 'win32' }).length, 0);
+  expect('argv policy: --no-sandbox is refused everywhere', unsafeSwitches(['exe', '--no-sandbox'], {}, { platform: 'linux' }).length, 1);
 
   const ENV = { BENTO_TEST_HEADLESS: '1' };
   const port = ['exe', '--remote-debugging-port=0'];

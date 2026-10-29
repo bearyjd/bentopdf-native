@@ -11,6 +11,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=packaging/asar-policy-mutations.sh
+. "$ROOT/packaging/asar-policy-mutations.sh"
 GATE="${GATE:-$ROOT/packaging/verify-artifact-win.sh}"
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 SEED="$ROOT/desktop/release/win-unpacked" INSTALLER="" PORTABLE=""
@@ -122,11 +124,9 @@ m_win_no_lstat_link() { edit_asar "$1" 's/lst.isSymbolicLink() || !lst.isFile()/
 m_win_no_res_realpath() { edit_asar "$1" 's/if (!sameWin32Path(res, P.resolve(resourcesPath))) return false;/\/\/ MUTATED/' src/test-mode.js; }
 m_win_no_marker_realpath() { edit_asar "$1" 's/if (!sameWin32Path(fsImpl.realpathSync.native(marker), marker)) return false;/\/\/ MUTATED/' src/test-mode.js; }
 m_win_no_devino() { edit_asar "$1" 's/ || st.dev !== lst.dev || st.ino !== lst.ino) return false;/) return false; \/\/ MUTATED/' src/test-mode.js; }
-m_win_no_nlink() { edit_asar "$1" 's/if (st.nlink !== 1 || st.size !== MARKER_CONTENT.length) return false;/\/\/ MUTATED/' src/test-mode.js; }
 m_env_elsewhere() { edit_asar "$1" '1a const leak = process.env.HOME; // MUTATED' src/app.js; }
 m_marker_in_resources() { printf 'bento-test-mode-v1\n' > "$1/resources/.bento-test-mode"; }
 m_marker_upper_root() { printf 'bento-test-mode-v1\n' > "$1/.BENTO-TEST-MODE"; }
-m_no_slash_switch_rule() { edit_asar "$1" "s/platform === 'win32' \&\& arg.startsWith('\/')/false \/\/ MUTATED/" src/argv-policy.js; }
 m_no_windows_path_rules() { edit_asar "$1" 's/windowsPathProblem/wpp_MUTATED/g' src/open-file.js; }
 m_no_static_rules() { edit_asar "$1" 's/isWindowsUnsafeSegment/iwus_MUTATED/g' src/static-files.js; }
 m_shell_js_realpath() { edit_asar "$1" 's/fs.realpathSync.native(distDir)/fs.realpathSync(distDir) \/\/ MUTATED/' src/shell/shell-app.js; }
@@ -172,11 +172,15 @@ attempt "win32 marker: symlink/junction not refused" m_win_no_lstat_link
 attempt "win32 marker: resources realpath unchecked" m_win_no_res_realpath
 attempt "win32 marker: reparse redirect unchecked" m_win_no_marker_realpath
 attempt "win32 marker: lstat/fstat swap unchecked" m_win_no_devino
-attempt "win32 marker: nlink/size unchecked" m_win_no_nlink
 attempt "process.env read outside the guard" m_env_elsewhere
 attempt "test-mode marker in resources/" m_marker_in_resources
 attempt "test-mode marker at the root, other case" m_marker_upper_root
-attempt "/switch no longer a switch on win32" m_no_slash_switch_rule
+# Mutations of the marker logic and argv policy (shared with the Linux-runnable test-asar-policy-mutations.sh).
+m_policy() { edit_asar "$1" "$PM_EXPR" "src/$PM_FILE"; }
+for entry in "${POLICY_MUTATIONS[@]}"; do
+  IFS='|' read -r pm_name PM_FILE PM_EXPR <<<"$entry"
+  attempt "$pm_name" m_policy
+done
 attempt "Windows open-with path rules removed" m_no_windows_path_rules
 attempt "Windows static path rules removed" m_no_static_rules
 attempt "bundle root not canonicalised natively" m_js_realpath
