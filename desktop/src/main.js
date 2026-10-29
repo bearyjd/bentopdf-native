@@ -68,7 +68,7 @@ function installShellMenu(menuActions, recents) {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-const refused = unsafeSwitches(process.argv);
+const refused = unsafeSwitches(process.argv, overrides, { packaged: app.isPackaged });
 if (refused.length > 0) {
   process.stderr.write(`[bento] refusing to start with unsafe switch(es): ${refused.join(' ')}\n`);
   app.exit(2);
@@ -94,7 +94,7 @@ if (refused.length > 0) {
   };
 
   app.on('second-instance', (_event, argv, workingDirectory) => {
-    const unsafe = unsafeSwitches(argv, undefined, { secondInstance: true });
+    const unsafe = unsafeSwitches(argv, overrides, { secondInstance: true, packaged: app.isPackaged });
     if (unsafe.length > 0) {
       log(`ignored a second launch with unsafe switch(es): ${unsafe.join(' ')}`);
       return;

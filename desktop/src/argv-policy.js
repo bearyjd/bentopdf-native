@@ -18,7 +18,8 @@ const ALWAYS_ALLOWED = new Set([
   `${DASHES}ozone-platform-hint=x11`,
 ]);
 // The test harness drives the real artifact headless over the debug port. These
-// pass only when BENTO_TEST_HEADLESS=1 is in the environment.
+// pass only when BENTO_TEST_HEADLESS=1 is in the environment of an UNPACKAGED run (main.js passes
+// `app.isPackaged ? {} : process.env`; the default env here is empty, so it fails closed).
 const TEST_EXACT = new Set([`${DASHES}ozone-platform=headless`, `${DASHES}remote-debugging-pipe`]);
 const TEST_PREFIX = [`${DASHES}remote-debugging-port=`, `${DASHES}user-data-dir=`];
 
@@ -40,11 +41,12 @@ function allowed(arg, testMode, secondInstance) {
  * Returns the arguments of `argv` (after the executable) that this application
  * refuses, i.e. every switch not on the allowlist (empty array = fine).
  */
-function unsafeSwitches(argv, env = process.env, { secondInstance = false } = {}) {
+function unsafeSwitches(argv, env = {}, { secondInstance = false, packaged = false } = {}) {
   const list = Array.isArray(argv) ? argv.slice(1) : [];
   const end = list.indexOf('--');
   const options = end === -1 ? list : list.slice(0, end);
-  const testMode = env.BENTO_TEST_HEADLESS === '1';
+  // A packaged build never honours the test switch, whatever its environment says.
+  const testMode = !packaged && env.BENTO_TEST_HEADLESS === '1';
   return options.filter((arg) => looksLikeSwitch(arg) && !allowed(arg, testMode, secondInstance));
 }
 
