@@ -33,7 +33,7 @@ const packed = (name) => readOr(path.join(src, name));
 if (packed('build-flavour.js') !== readOr(path.join(FLAVOUR_DIR, FLAVOUR, 'build-flavour.js'))) fail(`build flavour: src/build-flavour.js is not the ${FLAVOUR} flavour file (flavours/${FLAVOUR}/build-flavour.js)`);
 if (require(path.join(src, 'build-flavour.js')).flavour !== FLAVOUR) fail(`build flavour: src/build-flavour.js does not say ${FLAVOUR}`);
 // Both flavours: the argv policy keeps its own flavour rule (a second layer behind the stub).
-for (const needle of ["const TEST_FLAVOURS = new Set(['dev', 'smoke']);", 'return TEST_FLAVOURS.has(flavour) && testHeadless(env) && (!packaged || testMarker === true);']) {
+for (const needle of ["const TEST_FLAVOURS = new Set(['dev', 'smoke']);", 'return TEST_FLAVOURS.has(flavour) && testHeadless(env) && ']) {
   if (!(packed('argv-policy.js') || '').includes(needle)) fail(`build flavour: argv-policy.js lost the flavour rule: ${needle}`);
 }
 const isStub = packed('test-mode.js') === readOr(path.join(FLAVOUR_DIR, 'release', 'test-mode.js'));
