@@ -101,45 +101,57 @@ function dumpTraces() {
   }
 }
 
-// Diagnostic: launch a second instance with one kind of argument at a time and report exit code and whether it
-// reached main.js at all (its own trace file appears) -- isolates which argument kills it before JavaScript runs.
-async function probeVariants() {
-  const variants = {
-    'no file argument': [],
-    'plain ascii pdf': [pdfA],
-    'space + non-ascii pdf': [pdfB],
-    'file URL': [pathToFileURL(pdfC).href],
-    'UNC pdf': ['\\\\127.0.0.1\\c$\\unc-refused.pdf'],
-  };
-  for (const [name, args] of Object.entries(variants)) {
-    const before = new Set(fs.readdirSync(traceDir));
-    const probe = launch([...testArgs, ...args]);
-    const exited = await until(() => probe.child.exitCode !== null && { code: probe.child.exitCode }, 30000, 'probe exit').catch(() => ({ code: 'timeout' }));
-    const own = fs.readdirSync(traceDir).filter((f) => !before.has(f) && f.startsWith('trace-'));
-    process.stdout.write(`probe [${name}]: exit=${exited.code} reachedMainJs=${own.length > 0} stderr=${probe.stderr.slice(0, 200).replace(/\s+/g, ' ')}\n`);
-    killTree(probe.child);
-  }
+const UNC = '\\\\127.0.0.1\\c$\\unc-refused.pdf';
+
+// Process list, for the case where a launch does not exit: shows where a portable stub is stuck.
+function describeProcesses() {
+  const ps = "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'portable|BentoPDF|bento' } | ForEach-Object { '{0} ppid={1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.ExecutablePath }";
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8', timeout: 30000 });
+  process.stdout.write(`processes while a launch is stuck:\n${(r.stdout || r.stderr || '(none)').slice(0, 1500)}\n`);
+}
+
+// One second-instance launch. Returns the exit code, the events it produced in the first instance's log and
+// whether it reached main.js (its own trace file appeared). Absence of an event is never read as a refusal.
+async function launchSecond(args, label) {
+  const eventsBefore = readEvents().length;
+  const tracesBefore = new Set(fs.readdirSync(traceDir));
+  const second = launch([...testArgs, ...args]);
+  const exited = await until(() => second.child.exitCode !== null && { code: second.child.exitCode }, 30000, 'second instance exit').catch(() => ({ code: 'timeout' }));
+  if (exited.code === 'timeout') describeProcesses();
+  await wait(1500);
+  const events = readEvents().slice(eventsBefore);
+  const reachedMainJs = fs.readdirSync(traceDir).some((f) => f.startsWith('trace-') && !tracesBefore.has(f));
+  process.stdout.write(`launch [${label}]: exit=${exited.code} reachedMainJs=${reachedMainJs} stderr=${second.stderr.slice(0, 160).replace(/\s+/g, ' ')}\n`);
+  killTree(second.child);
+  return { code: exited.code, events, reachedMainJs };
 }
 
 async function secondInstance(cdp) {
-  await probeVariants();
-  const eventsBefore = readEvents().length; // evidence must come from the launch below, not from the probes
   await cdp.js('window.__opened = []; window.bentoDesktop.onFileOpened((f) => window.__opened.push(f.name)); true');
-  // A backslash path with a space and a non-ASCII letter, a file:// URL, and a UNC path that must be refused.
-  const second = launch([...testArgs, pdfB, pathToFileURL(pdfC).href, '\\\\127.0.0.1\\c$\\unc-refused.pdf']);
-  const exited = await until(() => second.child.exitCode !== null && { code: second.child.exitCode }, 60000, 'second instance exit').catch(() => ({ code: 'timeout' }));
-  check('second instance exits cleanly', exited.code === 0, `exit=${exited.code} stderr=${second.stderr.slice(0, 300).replace(/\s+/g, ' ')}`);
-  check('second instance: backslash path with space and non-ASCII reached the first instance', await until(() => cdp.js('window.__opened.includes("second \\u00fc.pdf")'), 20000, 'forwarded file').catch(() => false));
-  check('second instance: file:///C:/... URL reached the first instance', await until(() => cdp.js('window.__opened.includes("third.pdf")'), 20000, 'forwarded URL').catch(() => false));
-  await wait(1500);
-  // The next two are only meaningful if the second-instance event provably arrived and was processed; with no
-  // event, "nothing was granted" would look like "refused", so absence of evidence is a FAIL.
-  const events = readEvents().slice(eventsBefore);
-  const delivered = /second-instance argv=/.test(events);
-  check('second-instance event arrived in the first instance (positive evidence)', delivered, delivered ? '' : 'no second-instance event in the test event log');
-  check('second instance: UNC path was refused (no grant)', delivered && !events.includes('granted unc-refused.pdf') && !(await cdp.js('window.__opened.includes("unc-refused.pdf")')), delivered ? '' : 'FAIL: nothing delivered, refusal not proven');
-  check('second instance: argv was not rejected by the switch policy (shows what Windows injects)', delivered && !/ignored second launch/.test(events), delivered ? (events.match(/ignored second launch.*/) || [''])[0] : 'FAIL: nothing delivered, policy not exercised');
-  killTree(second.child);
+  // The registered open command passes exactly one "%1", so each argument kind is its own launch.
+  const space = await launchSecond([pdfB], 'backslash path with space and non-ASCII');
+  check('second instance (path with space + non-ASCII) exits cleanly', space.code === 0, `exit=${space.code}`);
+  check('second-instance event for it arrived in the first instance (positive evidence)', /second-instance argv=.*second \u00fc\.pdf/.test(space.events), 'no event in the test event log');
+  check('second instance: backslash path with space and non-ASCII reached the first instance (grant)', await until(() => cdp.js('window.__opened.includes("second \\u00fc.pdf")'), 20000, 'forwarded file').catch(() => false));
+
+  const url = await launchSecond([pathToFileURL(pdfC).href], 'file:///C:/... URL');
+  check('second instance (file URL) exits cleanly', url.code === 0, `exit=${url.code}`);
+  check('second-instance event for the file URL arrived (positive evidence)', /second-instance argv=.*third\.pdf/.test(url.events), 'no event in the test event log');
+  check('second instance: file:///C:/... URL reached the first instance (grant)', await until(() => cdp.js('window.__opened.includes("third.pdf")'), 20000, 'forwarded URL').catch(() => false));
+
+  // UNC and the policy checks are only meaningful when the event provably arrived and was processed:
+  // "nothing was granted" must never be mistaken for "refused".
+  const unc = await launchSecond([UNC], 'UNC path');
+  const delivered = /second-instance argv=.*unc-refused\.pdf/.test(unc.events);
+  check('second-instance event for the UNC path arrived (positive evidence)', delivered, 'no event in the test event log');
+  check('second instance: UNC path was refused (no grant)', delivered && !unc.events.includes('granted unc-refused.pdf') && !(await cdp.js('window.__opened.includes("unc-refused.pdf")')), delivered ? '' : 'nothing delivered, refusal not proven');
+  const all = [space, url, unc].map((r) => r.events).join('');
+  check('second instance: argv was not rejected by the switch policy (shows what Windows injects)', delivered && !/ignored second launch/.test(all), delivered ? (all.match(/ignored second launch.*/) || [''])[0] : 'nothing delivered, policy not exercised');
+
+  // Diagnostic only (INFO, not a check): the exact multi-argument launch that died with exit 0xFFFFFFFF before
+  // main.js in earlier runs, and its pairs. Explorer never produces it (the open command has one "%1").
+  const combos = { 'space+url+unc': [pdfB, pathToFileURL(pdfC).href, UNC], 'space+url': [pdfB, pathToFileURL(pdfC).href], 'space+unc': [pdfB, UNC], 'url+unc': [pathToFileURL(pdfC).href, UNC] };
+  for (const [name, args] of Object.entries(combos)) await launchSecond(args, `INFO multi-argument ${name}`);
 }
 
 async function slashSwitchRefused() {
