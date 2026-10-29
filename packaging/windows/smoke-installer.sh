@@ -5,16 +5,16 @@
 #   packaging/windows/smoke-installer.sh <setup.exe> <portable.exe> [--expect-commit SHA] [--release]
 #   packaging/windows/smoke-installer.sh --portable-second-instance <portable.exe>
 #
-# Steps: silent per-user install to a temp dir; assert files, shortcuts (no sandbox flags), registry
+# Steps: silent per-user install to a temp dir that already holds a canary file; assert files, shortcuts (no sandbox flags), registry
 # (ProgID + OpenWithProgids only, the .pdf default untouched); run the release gate on the installed
 # tree (no marker yet); run the headless packaged smoke test, which proves the copy refuses test mode without
 # the marker, then creates the test-mode marker in this disposable installed copy only and removes it again;
-# assert the marker is gone; silent uninstall; assert files, shortcuts and keys are gone; then the portable exe:
+# assert the marker is gone; silent uninstall; assert the app files, shortcuts and keys are gone and the canary survived; then the portable exe:
 # the checks that need no test mode (its stub wipes the extraction directory, so no marker can be placed) and
 # no registry/shortcut traces. Every check runs; the exit status is non-zero if any failed. Results are also
 # appended to $GITHUB_STEP_SUMMARY when set.
 # --portable-second-instance runs only the portable second-instance part (a KNOWN FAILURE, issue #11; the
-# workflow runs it as its own non-blocking step so it can never hide in, or turn red, the blocking checks).
+# workflow runs it through portable-second-step.sh: exit 3 = the known #11 signature, anything else is red).
 set -uo pipefail
 
 # Git Bash would rewrite /S, /D=... and registry switches as if they were POSIX paths.
@@ -80,7 +80,11 @@ note "HKCU .pdf default before install: $(echo "$DEFAULT_BEFORE" | tr '\n' ' ')"
 check "ProgID key absent before install" absent reg_key "$PROGID_KEY"
 
 # ---- install ------------------------------------------------------------------------------------
-mkdir -p "$TMPROOT"
+# CANARY: the install directory is user-chosen and already holds foreign files. The uninstaller must remove the
+# app's files and leave these alone (electron-builder's default `RMDir /r $INSTDIR` would delete them: see installer.nsh).
+mkdir -p "$INSTALL_DIR/foreign"
+printf 'canary\n' > "$INSTALL_DIR/canary.txt"
+printf 'canary\n' > "$INSTALL_DIR/foreign/keep.txt"
 "$SETUP" /S "/D=$(win "$INSTALL_DIR")" >"$TMPROOT/install.log" 2>&1
 note "installer exit status: $?"
 for _ in $(seq 1 60); do [ -s "$EXE" ] && break; sleep 2; done
@@ -107,7 +111,8 @@ check "the test-mode marker is gone from the installed tree before uninstall" ab
 "$UNINSTALLER" /S >"$TMPROOT/uninstall.log" 2>&1
 for _ in $(seq 1 90); do [ ! -e "$EXE" ] && ! uninstall_entry && break; sleep 2; done
 check "executable removed by the uninstaller" absent exists "$EXE"
-check "no files left in the install directory" bash -c '[ ! -d "$1" ] || [ -z "$(find "$1" -type f | head -n1)" ]' _ "$INSTALL_DIR"
+check "no application files left in the install directory (only the canaries)" bash -c '[ ! -d "$1" ] || [ -z "$(find "$1" -type f ! -path "$1/canary.txt" ! -path "$1/foreign/keep.txt" | head -n1)" ]' _ "$INSTALL_DIR"
+check "canary file survived the uninstall (the uninstaller removes only its own files)" bash -c '[ "$(cat "$1/canary.txt")" = canary ] && [ "$(cat "$1/foreign/keep.txt")" = canary ]' _ "$INSTALL_DIR"
 check "uninstall registry entry removed" absent uninstall_entry
 check "desktop shortcut removed" absent exists "$DESKTOP_LNK"
 check "start menu shortcut removed" absent exists "$START_LNK"
