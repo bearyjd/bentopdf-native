@@ -159,9 +159,12 @@ like their double-dash forms. Matching is case-sensitive and exact, so `-no-sand
 `--proxy-server`, `--allow-file-access-from-files`, `--enable-features=`/`--disable-features=`,
 `--disable-blink-features` and the rest are all refused (unit-tested). A bare `--` ends the options:
 what follows is a file argument and still goes through the open-with validation. Only when
-`BENTO_TEST_HEADLESS=1` is in the environment (the test harness sets it) are
+`BENTO_TEST_HEADLESS=1` is in the environment **of an unpackaged run** (main.js passes
+`app.isPackaged ? {} : process.env` to the policy; a packaged build ignores the variable, and
+the AppRun and Flatpak launcher unset it together with `BENTO_DIST` and `BENTO_TRANSPORT`) are
 `--ozone-platform=headless`, `--remote-debugging-port=<n>`, `--remote-debugging-pipe` and
-`--user-data-dir=<dir>` also accepted; that is how the packaged smoke test drives the real artifact.
+`--user-data-dir=<dir>` also accepted; that is how the unpackaged test harness drives Electron. (The packaged smoke test used this
+to drive the artifact; it can no longer, see docs/shell.md "Not verified".)
 Electron itself adds `--allow-file-access-from-files` to the argv it reports for a second instance
 (found by the packaged smoke test; measured on Electron 45.1.0; the first launch's `process.argv` does
 not have it), so that one switch is accepted in second-instance argv only; it cannot affect the running

@@ -139,8 +139,16 @@ and friends return as soon as the page has loaded, they no longer wait up to
 
 While it runs the tab has a status ("Loading x.pdf into Merge PDF...") and a
 failure (e.g. "file changed since it was opened", no matching input within 30 s)
-is shown on the shell's status line for the active tab; a handoff superseded by
-a newer one, or into a discarded view, is dropped silently. Concurrent opens of
+is shown on the shell's status line for the active tab. A handoff is dropped
+silently (no injection, no success record, no status change) when it was
+superseded by a newer one, its view was discarded or replaced, **or its tab
+navigated**: every tab has a navigation epoch (bumped by `navigate()`,
+`recordPage()` and every main-frame `did-start-navigation` / `did-navigate-in-page`
+of its view) that the handoff compares with the value it started with, and
+immediately before `executeJavaScript` it re-checks that the view's URL is still
+`bento://app` + the intended tool's path. Page-originated error text is capped
+at 300 characters and stripped of control and bidi characters before it reaches
+the status line, state pushes or the (rate-limited) log. Concurrent opens of
 the same path are serialised (one document, one tab).
 
 Adapters (`handoff.js`): `merge-pdf` -> `#file-input`, multiple. Every other
@@ -154,11 +162,18 @@ path, not back into the store).
 
 Live views are limited by a **weighted slot budget** (`live-budget.js`, all
 numbers in that one file): default 6 slots; an ordinary tool or the landing page
-weighs 1, OCR 2, a LibreOffice conversion 4 (14 tools: Word/Excel/PowerPoint/
-ODF/RTF/... to PDF and PDF to Word). The weights are an **estimate from the M2
+weighs 1, OCR 2, a LibreOffice conversion 4. Which tool is heavy is **read from
+the bundle at startup**, not from a hand-kept list: a tool page whose HTML
+preloads the LibreOffice loader / `soffice` weighs 4, one that preloads the
+Tesseract runtime weighs 2 (14 LibreOffice pages in this bundle, including
+`pdf-workflow`; the old hand list wrongly included `pdf-to-word`, which does not
+load LibreOffice). A page that merely references an engine counts as heavy even
+if it loads it only on demand (conservative), and a tool id the registry does
+not know weighs the maximum (4). A unit test cross-checks the markers against
+an independent walk of each page's static import graph in `dist`. The weights are an **estimate from the M2
 findings** (one LibreOffice run ~1.7 GiB peak RSS, OCR ~0.9 GiB; one slot is
 about 0.4 GiB), not a measurement of the running machine. Opening, activating
-or navigating a tab discards the least recently active background views until
+navigating a tab (or a page navigating itself to another tool) discards the least recently active background views until
 the live weights fit (`webContents.close()`; the active tab is never discarded,
 even if it alone exceeds the budget). So one LibreOffice tab plus two ordinary
 ones fits; a second LibreOffice tab discards the first. A discarded tab keeps
@@ -211,6 +226,9 @@ WebContents has focus. macOS gets the `appMenu` role; `CmdOrCtrl` maps to Cmd.
   - `shellHandoff`: two documents open; Merge PDF opened for the one that is
     not active lists exactly that one (never the other), the store entry is
     touched, the unshown one is released.
+  - `shellHandoffNavigated`: a handoff held after its grant (test seam
+    `beforeInject`) while the tab navigates in-view to Split PDF injects
+    nothing into the second page, records no success and leaves no status.
   - `shellHandoffError`: the file is replaced (new inode) after it was opened;
     the tool opens, the IPC returns, and the failure ("file changed since it
     was opened") appears in the tab status and on the shell's status line.
@@ -239,6 +257,10 @@ WebContents has focus. macOS gets the `appMenu` role; `CmdOrCtrl` maps to Cmd.
 
 ## Not verified
 
+- The packaged smoke test (`test/packaged-smoke.js`) drives the artifact through
+  `--remote-debugging-port`, which a packaged build now refuses even with
+  `BENTO_TEST_HEADLESS=1` (the variable is only honoured unpackaged and the
+  launchers unset it). It has NOT been re-run or adapted since that change.
 - A visible window: the shell has only ever run headless. Layout, focus,
   keyboard shortcuts (accelerators are only unit-tested as data) and menus
   were never seen or pressed. **The window is still unseen.**

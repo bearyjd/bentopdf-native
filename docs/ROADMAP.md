@@ -98,7 +98,8 @@ Electron 45.1.0); `[~]` = PARTIAL; `[ ]` = not done. Nothing here was seen in a 
   permission lock and storage isolation (tab/tab and tab/shell) are e2e-tested.
 - [x] Live-view limit: a weighted slot budget (default 6; ordinary tool 1, OCR 2,
   LibreOffice conversion 4, from the M2 RSS numbers, constants in
-  `live-budget.js`) with discard and reload-on-activation that re-hands the
+  `live-budget.js`; which tool is heavy is read from the bundle's HTML, unknown
+  ids weigh 4, and a page navigating itself to a heavy tool re-triggers the discard) with discard and reload-on-activation that re-hands the
   document (policy unit-tested; discard/reload and the lockdown after reload
   e2e-tested). The weights are estimates, not a measurement of a running shell.
 - [x] Main-process document store (validated paths only, ids to renderers;
@@ -166,6 +167,28 @@ time, each reverted; "RED" = the named test failed, baseline green):
 | Window title taken from the page | RED: e2e shellLifecycle |
 | Per-path serialisation of concurrent opens removed | **GREEN (survived)**: the store and tab lookup run synchronously after the await, so duplicates cannot occur even without it; the helper is unit-tested (`serialByKey`) but its wiring is defence in depth with no test that can fail |
 
+Final fix round (each mutation applied alone to the worktree files, then restored; baseline green):
+
+| Mutation | Result |
+|---|---|
+| Handoff: epoch compare and page re-check both removed | RED: e2e shellHandoffNavigated (file injected into Split PDF, success recorded) |
+| `navigate()` does not bump the tab epoch | RED: shell-tabs unit |
+| `recordPage` does not call `enforceCap` | RED: shell-tabs unit |
+| Unknown tool ids weigh 1 instead of the maximum | RED: shell-tabs unit |
+| LibreOffice marker removed from `weightOfPage` | RED: shell-tabs unit (5 failures, incl. the dist cross-check) |
+| Packaged build honours `BENTO_TEST_HEADLESS` | RED: argv-policy unit |
+| AppRun / launcher stops unsetting `BENTO_TEST_HEADLESS` | RED: argv-policy unit; gate logic (`check_unset`) fails on a mutated AppRun (simulated; no artifact built) |
+| `hasNetworkPrefix` ignores `\\.\...` | RED: open-file + shell-store unit |
+| `hasNetworkPrefix` rejects `\\?\C:\...` again / allows `\\?\UNC\...` | RED: open-file unit / open-file + shell-store unit |
+| Dialog grants back to a bare `stat` | RED: ipc unit |
+| No active-tab re-check after the dialog returns | RED: ipc unit |
+| Opener dereferences the store record unguarded | RED: shell-open-document unit |
+| `sanitizeText` without cap / without control stripping | RED: shell-hardening unit |
+
+New `packaging/verify-artifact.sh` checks and `packaging/test-verify-artifact.sh` mutations
+(BENTO_TEST_HEADLESS honoured when packaged; AppRun / Flatpak launcher no longer unsets it) are
+written but only the gate logic was exercised: no deb/rpm/AppImage/Flatpak was built in this round.
+
 **Packaged (Linux AppImage only, this branch's HEAD, built with
 `electron-builder --linux AppImage`, hardened, headless):** `verify-artifact.sh
 --allow-dirty` VERIFIED (13 checks; the NOTICE-marker line is the usual "not for
@@ -175,6 +198,10 @@ rendered), tool tab isolated, renderers sandboxed, hostile `BENTO_*` env ignored
 second instance forwards its PDF. deb, rpm, Flatpak, macOS, Windows: not built.
 
 **NOT VERIFIED (M3a):**
+
+- The packaged smoke test drives the artifact over `--remote-debugging-port`, which a packaged
+  build now refuses even with `BENTO_TEST_HEADLESS=1`; it was not re-run or adapted. The
+  packaged results above predate that change.
 
 - A visible window was never seen (headless only, the M2 display gate above
   still applies); layout, focus, shortcuts and menus were never exercised by a
