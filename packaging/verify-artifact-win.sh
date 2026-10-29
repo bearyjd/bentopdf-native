@@ -163,7 +163,7 @@ grep -qF "(!packaged || testMarker === true)" "$WORK/asar/src/argv-policy.js" ||
 for needle in "if (platform === 'win32') return hasTestMarkerWin32(resourcesPath, fsImpl);" \
   'fsImpl.realpathSync.native(resourcesPath)' 'sameWin32Path(res, P.resolve(resourcesPath))' 'const marker = P.join(res, MARKER_NAME);' \
   'lst.isSymbolicLink() || !lst.isFile()' 'sameWin32Path(fsImpl.realpathSync.native(marker), marker)' \
-  'st.dev !== lst.dev || st.ino !== lst.ino' 'st.nlink !== 1 || st.size !== MARKER_CONTENT.length' "=== MARKER_CONTENT;"; do
+  'st.dev !== lst.dev || st.ino !== lst.ino' 'Number(st.nlink) !== 1 || Number(st.size) !== MARKER_CONTENT.length' "=== MARKER_CONTENT;"; do
   grep -qF -- "$needle" "$T" || fail "test-mode.js lost the win32 marker control: $needle"
 done
 grep -qF "const MARKER_CONTENT = 'bento-test-mode-v1\\n';" "$T" || fail "test-mode.js marker token changed"
