@@ -83,7 +83,8 @@ function pdfPathsFromArgv(argv, { cwd = process.cwd(), defaultApp = false, platf
       continue;
     }
     if ((!optionsEnded && looksLikeSwitch(arg, platform)) || arg.includes('\0')) continue;
-    const isFileUrl = /^file:\/\//i.test(arg);
+    // Windows URL schemes are case-insensitive in practice; on POSIX only the exact `file://` (as on main) is a file URL.
+    const isFileUrl = platform === 'win32' ? /^file:\/\//i.test(arg) : arg.startsWith('file://');
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(arg) && !isFileUrl) continue; // other URL schemes
     let local = isFileUrl ? localPathOfFileUrl(arg, platform) : arg; // %U launchers pass file:// URLs
     if (local === null || local.includes('\0') || hasNetworkPrefix(local)) continue;

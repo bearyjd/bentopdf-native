@@ -33,6 +33,11 @@ test('pdfPathsFromArgv: file:// URLs (the %U field code) are decoded; remote hos
   assert.deepEqual(pdfPathsFromArgv(['exe', 'file:///C:/Users/u/My%20Doc.pdf', 'file:///home/u/x.pdf', 'file://evil.example/share/x.pdf'], { platform: 'win32' }), ['C:\\Users\\u\\My Doc.pdf']);
 });
 
+test('pdfPathsFromArgv: an upper-case FILE:// URL is another scheme on POSIX, a file URL on win32', () => {
+  assert.deepEqual(pdfPathsFromArgv(['exe', 'FILE:///home/u/x.pdf'], posix), []);
+  assert.deepEqual(pdfPathsFromArgv(['exe', 'FILE:///C:/u/x.pdf'], { platform: 'win32' }), ['C:\\u\\x.pdf']);
+});
+
 test('pdfPathsFromArgv: unpackaged argv also skips the app path; non-arrays and huge lists are bounded', () => {
   assert.deepEqual(pdfPathsFromArgv(['electron', '/app/main.pdf', 'x.pdf'], { cwd: '/w', defaultApp: true, ...posix }), ['/w/x.pdf']);
   assert.deepEqual(pdfPathsFromArgv(undefined, posix), []);
