@@ -21,3 +21,8 @@ keystore.properties
 .claude/
 .ignore
 .cache/
+
+# Packaging outputs
+desktop/release/
+packaging/generated/
+packaging/flatpak/.build/

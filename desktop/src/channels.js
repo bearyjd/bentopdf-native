@@ -6,6 +6,8 @@ const CHANNELS = Object.freeze({
   openFile: 'bento:open-file',
   readFile: 'bento:read-file',
   saveFile: 'bento:save-file',
+  takeOpened: 'bento:take-opened',
+  fileOpened: 'bento:file-opened',
 });
 
 module.exports = { CHANNELS };

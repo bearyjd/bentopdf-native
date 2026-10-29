@@ -8,6 +8,8 @@ const CHANNELS = Object.freeze({
   openFile: 'bento:open-file',
   readFile: 'bento:read-file',
   saveFile: 'bento:save-file',
+  takeOpened: 'bento:take-opened',
+  fileOpened: 'bento:file-opened',
 });
 
 /**
@@ -16,7 +18,9 @@ const CHANNELS = Object.freeze({
  *   openFile(options?: {multiple?: boolean, extensions?: string[]}): Promise<PickedFile[]>,
  *   readFile(token: string): Promise<Uint8Array>,
  *   saveFile(suggestedName: string, bytes: Uint8Array): Promise<{saved: boolean, name?: string}>,
- *   handoffToInput(files: PickedFile[], selector?: string): Promise<number>
+ *   handoffToInput(files: PickedFile[], selector?: string): Promise<number>,
+ *   takeOpenedFiles(): Promise<PickedFile[]>,
+ *   onFileOpened(callback: (file: PickedFile) => void): () => void
  * }} BentoDesktop
  */
 
@@ -54,6 +58,13 @@ async function handoffToInput(files, selector) {
 /** @type {BentoDesktop} */
 const bridge = {
   handoffToInput,
+  takeOpenedFiles: () => ipcRenderer.invoke(CHANNELS.takeOpened),
+  onFileOpened: (callback) => {
+    if (typeof callback !== 'function') throw new TypeError('callback must be a function');
+    const listener = (_event, picked) => callback(picked);
+    ipcRenderer.on(CHANNELS.fileOpened, listener);
+    return () => ipcRenderer.removeListener(CHANNELS.fileOpened, listener);
+  },
   openFile: (options) => ipcRenderer.invoke(CHANNELS.openFile, options),
   readFile: (token) => {
     if (typeof token !== 'string') return Promise.reject(new TypeError('token must be a string'));

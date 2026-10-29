@@ -1,0 +1,36 @@
+#!/bin/sh
+# AppRun for the AppImage (@PRODUCT_NAME@). Replaces electron-builder's, which
+# silently turns the Chromium sandbox off when user namespaces are unavailable. Here the
+# app either runs with Chromium's sandbox or does not run, and says why.
+set -eu
+
+HERE="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+# The app must never inherit a way to switch its sandbox off or to run as plain Node.
+unset ELECTRON_DISABLE_SANDBOX CHROME_DEVEL_SANDBOX ELECTRON_EXTRA_LAUNCH_ARGS ELECTRON_ENABLE_LOGGING ELECTRON_RUN_AS_NODE NODE_OPTIONS
+export PATH="$HERE:$HERE/usr/sbin${PATH:+:$PATH}"
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+refuse() {
+  msg="@PRODUCT_NAME@ cannot start: Chromium's sandbox needs unprivileged user namespaces and this system does not allow them.
+
+Typical causes: Ubuntu 23.10+/24.04 (AppArmor kernel.apparmor_restrict_unprivileged_userns=1), or kernel.unprivileged_userns_clone=0 / user.max_user_namespaces=0.
+
+@PRODUCT_NAME@ will not run without its sandbox.
+
+What to do:
+  - Immutable hosts (Bazzite, Silverblue, Kinoite): use the Flatpak build. Do not layer the .deb/.rpm just for this.
+  - Other distributions: install the .deb/.rpm (its installer picks a working sandbox), or ask your administrator to allow user namespaces for this application.
+  - Details: docs/desktop-linux.md in the source repository (see SOURCE.txt)."
+  printf '%s\n' "$msg" >&2
+  if [ -x /usr/bin/zenity ]; then LD_LIBRARY_PATH='' zenity --error --no-markup --text "$msg" 2>/dev/null || true
+  elif [ -x /usr/bin/kdialog ]; then LD_LIBRARY_PATH='' kdialog --error "$msg" 2>/dev/null || true
+  fi
+  exit 1
+}
+
+# If `unshare` is missing we cannot tell; let Chromium decide (it aborts with its own error, it never runs unsandboxed).
+if command -v unshare >/dev/null 2>&1 && ! unshare -Ur true 2>/dev/null; then
+  refuse
+fi
+
+exec "$HERE/@EXECUTABLE@" "$@"

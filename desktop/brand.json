@@ -1,0 +1,9 @@
+{
+  "productName": "BentoPDF Native",
+  "appId": "io.github.bearyjd.BentoPDFNative",
+  "executableName": "bentopdf-native",
+  "iconPng": "../packaging/icons/512x512.png",
+  "summary": "Offline PDF tools (unofficial BentoPDF packaging)",
+  "sourceUrl": "https://github.com/bearyjd/bentopdf-native",
+  "upstreamUrl": "https://github.com/alam00000/bentopdf"
+}

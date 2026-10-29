@@ -79,6 +79,7 @@ async function startApp(options) {
     origin,
     rootReal,
     window: win,
+    openPath: (filePath) => disposeIpc.openPath(win.webContents, filePath),
     blocked,
     permissionDecisions,
     close: async () => {

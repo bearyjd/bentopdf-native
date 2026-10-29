@@ -1,0 +1,128 @@
+name: desktop-linux
+
+# Builds the Linux x64 desktop packages (AppImage, deb, rpm) and runs the
+# artifact gate. Deliberately NOT triggered by pull_request: the build fetches
+# and executes upstream BentoPDF code (npm install and vite build), which must
+# never run on untrusted PR code. Signing and release publishing are out of
+# scope here (no secrets are used).
+#
+# `paths:` and tags: GitHub's workflow syntax reference states "Path filters are not
+# evaluated for pushes of tags", so the paths list below limits only the main-branch
+# trigger and every v* tag push builds (checked against the docs 2026-10-28).
+# Action pins were checked with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>`
+# (annotated tags dereferenced) on 2026-10-28: checkout v7.0.1, setup-node v7.1.0 and
+# upload-artifact v7.0.2 each resolve to the SHA pinned below.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'packaging/**'
+      - 'scripts/**'
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Release provenance (tags only)
+        # Releases are built from a tagged commit on main, never from a PR branch.
+        # PRs are squash-merged, so a PR-branch commit is not a durable source reference.
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          head="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          [ "$head" = "$tag_commit" ] || { echo "::error::HEAD $head is not the commit of tag $TAG ($tag_commit)"; exit 1; }
+          git fetch --no-tags "$REPO_URL" main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main \
+            || { echo "::error::tag $TAG ($tag_commit) is not reachable from main"; exit 1; }
+          echo "tag $TAG = $head, reachable from main"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Install rpm tooling (rpmbuild for the .rpm, rpm2cpio/cpio for the gate)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm cpio
+
+      - name: Lint shell scripts
+        run: shellcheck -S warning scripts/*.sh packaging/*.sh packaging/*/*.sh packaging/linux/AppRun packaging/flatpak/launcher.sh.in
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Lint and unit tests (no Electron e2e)
+        working-directory: desktop
+        run: |
+          npm run lint
+          node --test --test-concurrency=1 test/open-file.test.js test/argv-policy.test.js test/normalise-modes.test.js test/brand.test.js test/ipc.test.js test/security.test.js test/headers.test.js test/static-files.test.js test/transport-http.test.js
+
+      - name: Mutation test of the NOTICE check
+        run: bash packaging/test-check-notice.sh
+
+      - name: Licence gate (NOTICE)
+        id: notice
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          count="$(packaging/check-notice.sh)"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          if [ "$IS_TAG" = true ]; then
+            packaging/check-notice.sh --release >/dev/null
+          elif [ "$count" != 0 ]; then
+            echo "::warning::NOT FOR RELEASE: NOTICE has $count unresolved lines"
+            echo "### NOT FOR RELEASE: NOTICE has $count unresolved lines" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build packages (builds the offline bundle first when dist/ is missing)
+        run: bash scripts/package-linux.sh
+
+      - name: Verify artifacts
+        # Tag builds add --release: clean tree, release tag in SOURCE.txt, zero unresolved NOTICE lines.
+        # The Flatpak is not built or gated in CI (see docs/desktop-linux.md).
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          flags=()
+          [ "$IS_TAG" = true ] && flags+=(--release)
+          for f in desktop/release/*.AppImage desktop/release/*.deb desktop/release/*.rpm; do
+            bash packaging/verify-artifact.sh "${flags[@]}" "$f"
+          done
+
+      - name: Mutation test of the gate
+        run: bash packaging/test-verify-artifact.sh --no-flatpak
+
+      - name: Checksums
+        working-directory: desktop/release
+        run: sha256sum ./*.AppImage ./*.deb ./*.rpm | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ github.ref_type == 'tag' && 'bentopdf-native-linux-x64' || format('bentopdf-native-linux-x64-NOT-FOR-RELEASE-{0}-unresolved-notice-lines', steps.notice.outputs.count) }}
+          path: |
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.rpm
+            desktop/release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14

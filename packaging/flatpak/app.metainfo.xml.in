@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>@APP_ID@</id>
+  <name>@PRODUCT_NAME@</name>
+  <summary>Offline PDF tools in a locked-down desktop shell (unofficial)</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <developer id="io.github.bearyjd">
+    <name>bearyjd and contributors</name>
+  </developer>
+  <description>
+    <p>
+      @PRODUCT_NAME@ runs the BentoPDF toolset (merge, split, compress, OCR, convert and more)
+      entirely offline in a sandboxed Electron window. Documents never leave your computer; the
+      application makes no network requests and has no network permission in this package.
+    </p>
+    <p>
+      This is an unofficial, community-built packaging of BentoPDF. It is not affiliated with or
+      endorsed by the BentoPDF project. The application never updates itself.
+    </p>
+  </description>
+  <launchable type="desktop-id">@APP_ID@.desktop</launchable>
+  <url type="homepage">@SOURCE_URL@</url>
+  <url type="bugtracker">@SOURCE_URL@/issues</url>
+  <url type="vcs-browser">@SOURCE_URL@</url>
+  <provides>
+    <binary>@EXECUTABLE@</binary>
+    <mediatype>application/pdf</mediatype>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <categories>
+    <category>Office</category>
+    <category>Utility</category>
+  </categories>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="@VERSION@" date="2026-10-28" />
+  </releases>
+</component>

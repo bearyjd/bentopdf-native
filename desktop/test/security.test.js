@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const { CHANNELS } = require('../src/channels');
 const { safeFileName, parseOpenOptions, isTrustedSender } = require('../src/ipc');
 const { schemePrivileges } = require('../src/transport-scheme');
-const { isAllowedRequestUrl, lockSession } = require('../src/security');
+const { isAllowedRequestUrl, lockSession, secureWebPreferences } = require('../src/security');
 
 test('preload channel names mirror channels.js', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
@@ -79,4 +79,14 @@ test('lockSession denies every permission kind and reports each decision', () =>
   let result;
   handlers.before({ url: 'https://example.com/' }, (r) => (result = r));
   assert.deepEqual(result, { cancel: true });
+});
+
+test('windows are created with the renderer sandbox on and no Node in the page', () => {
+  const prefs = secureWebPreferences('/p/preload.js');
+  assert.equal(prefs.sandbox, true);
+  assert.equal(prefs.nodeIntegration, false);
+  assert.equal(prefs.contextIsolation, true);
+  const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.js'), 'utf8');
+  assert.match(app, /\.\.\.secureWebPreferences\(PRELOAD\)/);
+  assert.doesNotMatch(app, /sandbox:\s*false/);
 });

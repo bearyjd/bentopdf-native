@@ -1,0 +1,53 @@
+# Flatpak for @PRODUCT_NAME@ (unofficial). Local build, not submitted to Flathub.
+# Build: packaging/flatpak/build-flatpak.sh  (needs desktop/release/linux-unpacked from
+# scripts/package-linux.sh). Sandbox: Chromium's sub-sandbox runs through zypak from the
+# Electron BaseApp; the app is NEVER started with --no-sandbox.
+app-id: @APP_ID@
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '25.08'
+command: @EXECUTABLE@
+separate-locales: false
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Must stay AFTER --socket=fallback-x11: build-finish adds x11 for fallback-x11 and
+  # --nosocket=x11 only removes it when it is processed last.
+  - --nosocket=x11
+  # PDFs reach the app through the file chooser portal or file forwarding
+  # (flatpak rewrites the %f in the .desktop Exec line to forward files through the
+  # document portal).
+  # No --filesystem, and no --share=network: the app has no network access
+  # at all, matching its offline design.
+modules:
+  - name: @EXECUTABLE@
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --unshare=network
+    build-commands:
+      - mkdir -p /app/lib/@EXECUTABLE@
+      - cp -a linux-unpacked/. /app/lib/@EXECUTABLE@/
+      # zypak provides the sandbox in Flatpak; the setuid helper is unused and unusable there.
+      - rm -f /app/lib/@EXECUTABLE@/chrome-sandbox
+      - install -Dm755 @EXECUTABLE@.sh /app/bin/@EXECUTABLE@
+      - install -Dm644 @APP_ID@.desktop /app/share/applications/@APP_ID@.desktop
+      - install -Dm644 @APP_ID@.metainfo.xml /app/share/metainfo/@APP_ID@.metainfo.xml
+      - install -Dm644 icon-512.png /app/share/icons/hicolor/512x512/apps/@APP_ID@.png
+    sources:
+      - type: dir
+        path: ../../../../desktop/release/linux-unpacked
+        dest: linux-unpacked
+      - type: file
+        path: @EXECUTABLE@.sh
+      - type: file
+        path: @APP_ID@.desktop
+      - type: file
+        path: @APP_ID@.metainfo.xml
+      - type: file
+        path: icon-512.png
+        dest-filename: icon-512.png

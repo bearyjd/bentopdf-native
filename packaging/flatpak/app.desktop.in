@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=@PRODUCT_NAME@
+Comment=@SUMMARY@
+Exec=@EXECUTABLE@ %f
+Icon=@APP_ID@
+Terminal=false
+Categories=Office;Utility;
+MimeType=application/pdf;
+Keywords=PDF;document;
+StartupWMClass=@APP_ID@
