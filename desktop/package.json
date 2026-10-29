@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "test:csp-smoke": "node --test --test-timeout=900000 test/csp-smoke.test.js",
     "dist:linux": "bash ../scripts/package-linux.sh",
+    "dist:win": "bash ../scripts/package-windows.sh",
     "test:fuses": "node tools/check-fuses.js",
     "test:packaged": "node test/packaged-smoke.js"
   },
