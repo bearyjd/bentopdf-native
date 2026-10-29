@@ -14,20 +14,26 @@ field of each package's package.json, read from the npm tarball or the
 installed package at the versions the build uses). They are NOT a legal review.
 
   - BentoPDF v2.8.10 ........................ AGPL-3.0-only   [upstream package.json "license"]
-  - bentopdf-pdfium (vendor/ tarball) ....... AGPL-3.0        [tarball package.json "license"; note: not "-only"/"-or-later"]
+  - bentopdf-pdfium (vendor/ tarball) ....... AGPL-3.0        [tarball package.json "license": "AGPL-3.0" (bare SPDX id, not "-only"/"-or-later")]
   - bentopdf-viewer (vendor/ tarball) ....... MIT             [tarball package.json "license"]
-  - @bentopdf/pymupdf-wasm 0.11.16 .......... AGPL-3.0-only   [npm tarball package.json]
-  - @bentopdf/gs-wasm 0.1.1 (Ghostscript) ... AGPL-3.0-only   [npm tarball package.json]
-  - coherentpdf 2.5.5 (CPDF) ................ AGPL-3.0-or-later [npm tarball package.json]
+  - @bentopdf/pymupdf-wasm 0.11.16 .......... AGPL-3.0-only   [npm tarball package.json "license"]
+  - @bentopdf/gs-wasm 0.1.1 (Ghostscript) ... AGPL-3.0-only   [npm tarball package.json "license"]
+  - coherentpdf 2.5.5 (CPDF) ................ AGPL-3.0-or-later [npm tarball package.json "license"]
+                                              The identifiers above are those of the npm packages. The licence version
+                                              suffix of the upstream projects themselves (PyMuPDF, Ghostscript, CPDF) is
+                                              not confirmed here, and the upstream version each package was built from is
+                                              not stated in the package metadata read.
   - tesseract.js 7.0.0 ...................... Apache-2.0       [npm tarball package.json]
   - tesseract.js-core 7.0.0 ................. Apache-2.0       [npm tarball package.json]
-  - @tesseract.js-data/eng 1.0.0 (4.0.0_best_int) ... MIT (npm wrapper package) / Apache-2.0 (model data)
+  - @tesseract.js-data/eng 1.0.0 (4.0.0_best_int) ... MIT (npm wrapper package) / Apache-2.0 (model data, INFERRED)
                                                               [wrapper: registry metadata for @tesseract.js-data/eng@1.0.0.
-                                                              Model data: naptha/tessdata README lists "4.0.0_best_int" as
-                                                              "Integerized Version of "Tessdata Best"", and tesseract-ocr/tessdata_best
-                                                              README states "All data in the repository are licensed under the
-                                                              Apache-2.0 License" (LICENSE = Apache License 2.0). The naptha/tessdata
-                                                              repository itself carries an Apache License 2.0 LICENSE file.
+                                                              Model data: inferred from READMEs (tessdata_best Apache-2.0 +
+                                                              naptha README + repo LICENSE); package bytes not compared to the
+                                                              repository. naptha/tessdata README lists "4.0.0_best_int" as
+                                                              "Integerized Version of "Tessdata Best""; tesseract-ocr/tessdata_best
+                                                              README: "All data in the repository are licensed under the
+                                                              Apache-2.0 License"; the naptha/tessdata repository carries an
+                                                              Apache License 2.0 LICENSE file.
                                                               English only is shipped by default; any other language added via
                                                               OCR_LANGUAGES is not covered by this line. See docs/license-review.md]
   - @embedpdf/fonts-{latin,arabic,hebrew} 1.0.0 .. OFL-1.1    [npm tarball package.json; CJK packs not shipped by default]
@@ -40,7 +46,14 @@ installed package at the versions the build uses). They are NOT a legal review.
                                               copyright notices and license terms applicable to portions of the Software are
                                               set forth in the LICENSE.html file". That LICENSE.html is not shipped in the
                                               dist and the engine build's third-party component list was not obtained from
-                                              primary evidence, so those component licences are NOT enumerated here:
+                                              primary evidence, so those component licences are NOT enumerated here.
+                                              Source pointers (MPL-2.0 source offer): LibreOffice release sources are
+                                              published at https://download.documentfoundation.org/libreoffice/src/ ;
+                                              the wrapper's repository is https://github.com/matbeedotcom/libreoffice-document-converter
+                                              (package.json "repository"), whose docs/API.md has a "Building from Source"
+                                              section. Which LibreOffice version, patches and build recipe produced the
+                                              shipped soffice.wasm is NOT established, so the exact corresponding source
+                                              of that binary is not identified:
                                               NEEDS REVIEW (docs/license-review.md)
   - OCR font Noto Sans (wasm/ocr/fonts/NotoSans-Regular.ttf) ... OFL-1.1  [the font's own name table (nameID 13) reads "This Font
                                               Software is licensed under the SIL Open Font License, Version 1.1"; file sha256
@@ -49,7 +62,8 @@ installed package at the versions the build uses). They are NOT a legal review.
                                               License, Version 1.1"]
   - xlsx (SheetJS) 0.20.3 ................... Apache-2.0       [upstream package-lock.json "license"]
   - Other npm dependencies bundled by vite .. see docs/license-review.md: every non-dev package in upstream's package-lock.json
-                                              (472 entries at v2.8.10) with its lockfile "license" field. Permissive
+                                              (472 entries of the package-lock.json as shipped at the v2.8.10 tag, whose
+                                              lockfile root "version" is 2.8.9 while package.json says 2.8.10) with its lockfile "license" field. Permissive
                                               (MIT/ISC/BSD/Apache/0BSD/Unlicense/OFL/BlueOak/MIT-0/Zlib/Python-2.0) or
                                               an OR-choice including a permissive licence, except the AGPL packages above,
                                               MPL-2.0 (dompurify choice, lightningcss build tool, LibreOffice wrapper) and
@@ -63,17 +77,26 @@ installed package at the versions the build uses). They are NOT a legal review.
                                               every Linux artifact (AppImage, deb, rpm, Flatpak); the release gate
                                               (packaging/verify-artifact.sh) fails if that file or LICENSE.electron.txt
                                               is missing or empty.
-                                              LGPL component (FFmpeg): libffmpeg.so inside the package is a separate
-                                              shared library, FFmpeg git-2026-08-25-e5441fe421, which reports "libavformat,
-                                              libavutil, libavcodec license: LGPL version 2.1 or later" (read from the
-                                              binary with `strings`, Electron 45.1.0 download). It is a dynamic
-                                              dependency of the executable (DT_NEEDED, `readelf -d`), so a rebuilt libffmpeg.so
-                                              placed in the same directory replaces it.
-                                              Corresponding source: Electron v45.1.0 (github.com/electron/electron, tag
-                                              v45.1.0) pins Chromium and its third_party/ffmpeg revision in its DEPS file;
-                                              the licence text is in LICENSES.chromium.html. SOURCE.txt records the
-                                              Electron version and the sha256 of the shipped binary. This is a statement
-                                              of what is shipped and where its source is, not legal advice.
+                                              LGPL component (FFmpeg): libffmpeg.so is a separate shared library file in
+                                              the Electron 45.1.0 linux-x64 download, in the unpacked build, in the .deb
+                                              (/opt/BentoPDF Native/libffmpeg.so) and in the Flatpak
+                                              (/app/lib/bentopdf-native/libffmpeg.so); the executable lists it as a
+                                              dynamic dependency (`readelf -d`, DT_NEEDED). The AppImage and the .rpm
+                                              were not inspected for this. The library reports FFmpeg
+                                              git-2026-08-25-e5441fe421 and "libavformat, libavutil, libavcodec license:
+                                              LGPL version 2.1 or later" (read with `strings`).
+                                              Source pointers: Electron v45.1.0 (github.com/electron/electron, tag
+                                              v45.1.0) DEPS pins chromium_version 156.0.8078.49; that Chromium's DEPS
+                                              pins src/third_party/ffmpeg at chromium/third_party/ffmpeg.git revision
+                                              9db86ce5b5b454dfc96c435f9f0723012980c37f. The revision string e5441fe421
+                                              reported by the binary does NOT appear in that DEPS file, so the shipped
+                                              libffmpeg.so is not matched to a pinned source revision here.
+                                              Whether a user can replace libffmpeg.so is NOT VERIFIED for any package
+                                              format (the Flatpak /app tree is read-only at runtime and an AppImage is a
+                                              read-only squashfs; the .deb/.rpm install locations were not tested):
+                                              NEEDS REVIEW (human/legal decision on LGPL relinking/replacement for each
+                                              format; not decided here). The licence text is in LICENSES.chromium.html.
+                                              SOURCE.txt records the Electron version and the sha256 of the shipped binary.
   - Electron Flatpak runtime and base (flatpak bundle only) ... the .flatpak bundle does NOT contain
                                               org.freedesktop.Platform 25.08 (installed from flathub at install time, not
                                               redistributed by us). It DOES contain the files of org.electronjs.Electron2.BaseApp
@@ -82,7 +105,33 @@ installed package at the versions the build uses). They are NOT a legal review.
                                               libsecret (LGPL-2.1), libgnome-keyring (LGPL-2), libindicator (GPL-3 text), libspeechd
                                               (GPL-2 text), plus their licence texts under
                                               /app/share/licenses/org.electronjs.Electron2.BaseApp/ (read from the built tree).
-                                              Their sources are listed in /app/manifest.json inside the bundle.
+                                              Source locations of the exact versions, read from /app/manifest.json inside
+                                              the bundle (third-party upstream URLs, not hosted by this project; the
+                                              manifest's patches and build scripts are in
+                                              https://github.com/flathub/org.electronjs.Electron2.BaseApp, branch
+                                              branch/25.08):
+                                                libindicator (GPL-3 text)  12.10.1 https://launchpad.net/libindicator/12.10/12.10.1/+download/libindicator-12.10.1.tar.gz
+                                                libspeechd (GPL-2 text)    0.12.1  https://github.com/brailcom/speechd/releases/download/0.12.1/speech-dispatcher-0.12.1.tar.gz
+                                                dbus-glib                  0.114   https://dbus.freedesktop.org/releases/dbus-glib/dbus-glib-0.114.tar.gz
+                                                libappindicator            12.10.0 https://launchpad.net/libappindicator/12.10/12.10.0/+download/libappindicator-12.10.0.tar.gz
+                                                libdbusmenu                16.04.0 https://launchpad.net/libdbusmenu/16.04/16.04.0/+download/libdbusmenu-16.04.0.tar.gz
+                                                dee                        1.2.7   https://launchpad.net/dee/1.0/1.2.7/+download/dee-1.2.7.tar.gz
+                                                libsecret                  0.21.7  https://download.gnome.org/sources/libsecret/0.21/libsecret-0.21.7.tar.xz
+                                                libgnome-keyring           3.12.0  https://download.gnome.org/sources/libgnome-keyring/3.12/libgnome-keyring-3.12.0.tar.xz
+                                                libunity                   7.1.4+19.04.20190319 (Ubuntu orig tarball, URL in the manifest)
+                                              Whether pointing at those upstream locations (rather than hosting the
+                                              source or making a written offer) satisfies the GPL/LGPL source terms for
+                                              this project as the distributor is not decided here:
+                                              NEEDS REVIEW (legal decision on GPL-3/GPL-2/LGPL source offer for the Flatpak)
+                                              patch-electron-desktop-filename is a Go program; the bundle ships its binary,
+                                              built with vendored Go modules (/app/manifest.json): codeberg.org/jakobdev/asar-go
+                                              v1.2.0 (LICENSE: "BSD 3-Clause License"), github.com/alecthomas/kong v1.15.0
+                                              (COPYING: "Permission is hereby granted, free of charge ..."), golang.org/x/sync
+                                              v0.20.0 (LICENSE: "Copyright 2009 The Go Authors. Redistribution and use in
+                                              source and binary forms ..."), read from the module zips at proxy.golang.org
+                                              (sha256 match the manifest). Their licence texts are not shipped in the bundle
+                                              or reproduced in this file, and the Go standard library linked into the
+                                              binary is not enumerated: NEEDS REVIEW
                                               zypak and patch-electron-desktop-filename have EMPTY licence directories in that
                                               tree. Their licences, read from the upstream sources the base app pins: zypak
                                               v2025.09 (github.com/refi64/zypak, LICENSE; GitHub licence API: BSD-3-Clause) and
@@ -92,14 +141,30 @@ installed package at the versions the build uses). They are NOT a legal review.
   - electron-builder 26.18.0, app-builder-lib 26.18.0, @electron/fuses 2.1.3 (build tools, not shipped in artifacts) ...
                                               MIT [installed package.json "license"]
   - BentoPDF logo ........................... no longer used. The application icon (packaging/icons/icon.svg and its PNG
-                                              render) is a self-made geometric document glyph, released CC0-1.0; no upstream
-                                              artwork is in the icon, desktop entries or AppStream metadata.
-  - NSIS (Windows installer, electron-builder) ... not part of any artifact yet (Windows is CI-only). electron-builder's nsis-3.0.4.1
-                                              download ships COPYING: all NSIS source, plug-ins and stubs zlib/libpng, except the
-                                              bzip2 module (bzip2 licence) and the LZMA module (CPL-1.0 with a special linking
-                                              exception). The separate nsis-resources-3.4.1 plug-in DLLs are not evidenced here
-                                              and are to be read when a Windows installer is first shipped
-  - Capacitor ............................... not part of any artifact yet (planned milestone); its licence is to be read when it is added
+                                              render) is declared by the repository author to be a self-made geometric
+                                              document glyph released CC0-1.0 [author declaration; its header says "No upstream
+                                              or third-party artwork"; no BentoPDF mark seen on inspection]. CC0 holds only if
+                                              the author owns the work; AI-assisted provenance is not established either way.
+                                              The repository owner is asked to confirm authorship (docs/license-review.md)
+  - NSIS (Windows installer, electron-builder) ... Windows installers ARE built in CI, so the NSIS components below are in scope.
+                                              electron-builder's nsis-3.0.4.1 download ships COPYING: "All NSIS source code,
+                                              plug-ins, documentation, examples, header files and graphics, with the exception
+                                              of the compression modules and where otherwise noted, are licensed under the
+                                              zlib/libpng license", "The bzip2 compression module for NSIS is licensed under
+                                              the bzip2 license." and "The LZMA compression module for NSIS is licensed under
+                                              the Common Public License version 1.0." COPYING adds: "SPECIAL EXCEPTION FOR LZMA
+                                              COMPRESSION MODULE ... Igor Pavlov and Amir Szekely, the authors of the LZMA
+                                              compression module for NSIS, expressly permit you to statically or dynamically
+                                              link your code (or bind by name) to the files from the LZMA compression module
+                                              for NSIS without subjecting your linked code to the terms of the Common Public
+                                              license version 1.0. Any modifications or additions to files from the LZMA
+                                              compression module for NSIS, however, are subject to the terms of the Common
+                                              Public License version 1.0."
+                                              The separate nsis-resources-3.4.1 plug-in DLLs (nsis7z, UAC, StdUtils, nsisunz,
+                                              INetC, EmbedHTML, ...) ship without licence files and are not evidenced:
+                                              NEEDS REVIEW (read their licences before any Windows installer is released)
+  - Capacitor ............................... NOT shipped in any artifact (planned milestone); documentation only, no gate marker.
+                                              Its licence is to be read when it is added
 
 Explicitly excluded: hyper-compress-wasm and Kura (separately licensed by the
 BentoPDF authors; not redistributed here). At upstream v2.8.10 no source file
@@ -112,18 +177,37 @@ Links to those pages from navbar/legal pages are not removed.
 No release artifact ships while any line above is still marked as unresolved. Enforced by
 packaging/check-notice.sh --release and by `packaging/verify-artifact.sh --release` (tag builds).
 
-Corresponding source for any distributed artifact: this repository at the
-commit recorded in the bundle's SOURCE.txt, plus the pinned upstream BentoPDF
-tag and commit recorded in UPSTREAM_VERSION and UPSTREAM_COMMIT. Every built
-bundle contains SOURCE.txt, LICENSE and this NOTICE.
+Corresponding source for any distributed artifact:
+  - This project: this repository at the commit recorded in the bundle's SOURCE.txt, plus the pinned
+    upstream BentoPDF tag and commit recorded in UPSTREAM_VERSION and UPSTREAM_COMMIT. Every built bundle
+    contains SOURCE.txt, LICENSE and this NOTICE.
+  - @bentopdf/pymupdf-wasm 0.11.16 (modified PyMuPDF): package.json repository
+    https://github.com/alam00000/bentopdf-pymupdf-wasm.git ; its README: "The source code for this package is
+    available at: https://github.com/alam00000/bentopdf-pymupdf-wasm" and the package carries build_scripts/.
+  - @bentopdf/gs-wasm 0.1.1 (modified Ghostscript): package.json repository
+    https://github.com/alam00000/bentopdf-gs-wasm.git ; same README statement, with build_scripts/.
+  - coherentpdf 2.5.5: package.json repository https://github.com/coherentgraphics/coherentpdf.js.git
+    (homepage https://github.com/coherentgraphics/coherentpdf.js#readme). Its README states no separate
+    source location for the compiled JavaScript: NEEDS REVIEW (corresponding source of the shipped
+    coherentpdf.js build not identified).
+  - bentopdf-pdfium (AGPL-3.0): package.json declares no repository or homepage. The upstream workflow
+    .github/workflows/update-bentopdf-viewer.yml packs prebuilt packages/pdfium/src/vendor/pdfium.{js,wasm}
+    from https://github.com/alam00000/bentopdf-pdfium-viewer (branch main) into the vendor/ tarball; the
+    tarball holds only editcore.js, editcore.wasm and package.json. How that wasm was built, and its
+    source, is not shown by those files: NEEDS REVIEW (corresponding source of the pdfium engine).
+  - LibreOffice WASM build (MPL-2.0): see the LibreOffice engine line above; remains NEEDS REVIEW there.
+  - Flatpak GPL/LGPL base libraries: see the Electron Flatpak runtime line above.
+  - FFmpeg in Electron/Chromium: see the Chromium line above.
 
 PyMuPDF, Ghostscript and CoherentPDF are dual-licensed by their publishers: AGPL-3.0 as used here, and
 separate commercial licences from the publishers (quoted in docs/license-review.md). A downstream
-redistributor who cannot meet the AGPL for those components must obtain their own arrangement with the
-publisher; this file takes no position on that and is not legal advice.
+redistributor who cannot meet the AGPL for those components may need their own arrangement with the
+publisher; this file takes no position on that and is not legal advice. Whether the dual-licensing
+position affects redistribution of these artifacts is a legal question that is not decided here:
+NEEDS REVIEW
 
-The LGPL-2.1 FFmpeg library libffmpeg.so is shipped as a separate, replaceable shared library (see the
-Chromium line above); Electron and Chromium notices are in LICENSES.chromium.html.
+The LGPL-2.1+ FFmpeg library libffmpeg.so is shipped as a separate file (see the Chromium line above, which
+also records that replaceability is not verified); Electron and Chromium notices are in LICENSES.chromium.html.
 
 Licence texts reproduced because the Flatpak bundle does not ship them:
 
