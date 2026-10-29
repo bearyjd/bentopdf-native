@@ -243,15 +243,15 @@ dialog and `SOURCE.txt`, as on Linux.
 Evidence = GitHub Actions runs of `desktop-windows.yml` on `windows-latest` (a standard runner, headless, Windows
 Server image), from the branch `feat/m5-windows-on-main` (this work replayed onto main's marker-gated test mode),
 2026-10-29: 40840134744 (cancelled before it started, superseded), 40840883624 (red: three of main's unit tests assumed
-POSIX: a FIFO, a `/ok/c.pdf` argv without an explicit platform, `0600` mode bits), **40845803115 (green, final)**.
+POSIX: a FIFO, a `/ok/c.pdf` argv without an explicit platform, `0600` mode bits), **40845803115 (green, replay before the review fixes)** and **40853355808 (green, on head 9d6b8e8, after the review fixes)**.
 The temporary `push:` trigger used for these runs was removed again; the workflow runs on `workflow_dispatch`, `main`
 and tags. Earlier evidence from the pre-main branch (runs 40805536068 ... 40813630518) is superseded.
 
-**Proven by run 40845803115 on a real Windows runner**
+**Proven by runs 40845803115 and 40853355808 on a real Windows runner** (figures below are from the later run, 40853355808, unless stated)
 - Build of the NSIS installer and portable exe; the Windows gate passes on both (7-Zip extraction) and on
   `win-unpacked`; inside every gate run `tools/check-asar-policy.js` ran the packaged win32 marker branch against real
   NTFS files (valid accepted; extra bytes, other token, hard link, file symlink, directory, junctioned resources refused)
-  and against a fake fs, and the argv policy. Gate mutation test: 52 caught, 0 missed, 1 skipped (Git Bash cannot make symlinks).
+  and against a fake fs, and the argv policy. Gate mutation test: 60 caught, 0 missed, 1 skipped; asar-policy mutation test: 10 caught, 0 missed (Git Bash cannot make symlinks).
 - Silent per-user install and uninstall: files, HKCU uninstall entry, shortcuts (no sandbox/devtools arguments), ProgID,
   `OpenWithProgids`, `.pdf` default untouched; uninstall leaves no files, keys or shortcuts.
 - **Marker-gated test mode on the installed copy:** without the marker the test switches are refused (exit 2, no debug
@@ -264,7 +264,7 @@ and tags. Earlier evidence from the pre-main branch (runs 40805536068 ... 408136
   a backslash path with a space and non-ASCII and a `file:///C:/...` URL become document tabs, a UNC path
   `\\127.0.0.1\c$\...` is delivered and refused, Windows' injected argv passes the switch policy; `/no-sandbox` exits 2.
 - Portable exe without test mode: test switches refused (exit 2), `/no-sandbox` refused (exit 2), no registry/shortcut traces.
-- Unit tests on Windows: 131 pass, 0 fail, 18 skipped with stated reasons (POSIX-only FIFOs, mode bits and the POSIX
+- Unit tests on Windows: 231 tests, 212 pass, 0 fail, 19 skipped with stated reasons (POSIX-only FIFOs, mode bits and the POSIX
   marker branch); the real-file win32 marker test ran and passed. `windows`, `brand`, `headers`: 69 pass. Lint passes.
 
 **Failing / not proven**
