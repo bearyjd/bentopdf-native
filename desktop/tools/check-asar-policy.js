@@ -24,7 +24,10 @@ const EXEMPT = new Map([
   ['main.js|const refused = unsafeSwitches(process.argv, process.env, policyOptions);', 1],
   ['main.js|const unsafe = unsafeSwitches(argv, process.env, { ...policyOptions, secondInstance: true });', 1],
 ]);
-const isProcess = (n) => n && n.type === 'Identifier' && n.name === 'process';
+const isGlobalObject = (n) => n && n.type === 'Identifier' && (n.name === 'globalThis' || n.name === 'global');
+// `process`, `globalThis.process` and `global.process` all name the same object.
+const isProcess = (n) => n && ((n.type === 'Identifier' && n.name === 'process') ||
+  (n.type === 'MemberExpression' && !n.computed && isGlobalObject(n.object) && n.property.name === 'process'));
 const isEnvKey = (m) => (!m.computed && m.property.name === 'env') || (m.computed && m.property.type === 'Literal' && m.property.value === 'env');
 
 function envReads(node, out) {

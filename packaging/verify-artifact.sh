@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Release gate. Inspects a built Linux artifact without installing or starting it
-# and fails on the first violated rule. Missing or empty inputs are failures,
+# Release gate. Inspects a built Linux artifact without installing or starting it (the one exception: it loads
+# the packaged src/test-mode.js and src/argv-policy.js, pure node:fs/node:path modules, into a throwaway node process) and fails on the first violated rule. Missing or empty inputs are failures,
 # never skipped checks.
 #
 #   packaging/verify-artifact.sh [options] <file.AppImage | file.deb | file.rpm | flatpak-build-dir>
@@ -245,9 +245,11 @@ case "$KIND" in
     # deb/rpm launchers start the binary directly, with NO env scrub. For these the only defence for the packaged
     # test mode is that the install tree is root-owned (a user cannot create the marker in it): see docs/desktop-linux.md.
     if [ -z "$TREE" ]; then
-      if [ "$KIND" = deb ]; then NOT_ROOT="$(dpkg-deb -c "$ART" | awk '$2 != "0/0" && $2 != "root/root"' | wc -l)"; else NOT_ROOT="$(rpm -qp --queryformat '[%{FILEUSERNAME}:%{FILEGROUPNAME}\n]' "$ART" | grep -vxc 'root:root' || true)"; fi
+      if [ "$KIND" = deb ]; then dpkg-deb -c "$ART" > "$WORK/owners.txt" || fail "cannot list the package owners"; else rpm -qp --queryformat '[%{FILEUSERNAME}:%{FILEGROUPNAME}\n]' "$ART" > "$WORK/owners.txt" || fail "cannot list the package owners"; fi
+      [ -s "$WORK/owners.txt" ] || fail "empty package owner listing"
+      if [ "$KIND" = deb ]; then NOT_ROOT="$(awk '$2 != "0/0" && $2 != "root/root" {n++} END {print n+0}' "$WORK/owners.txt")"; else NOT_ROOT="$(awk '$0 != "root:root" {n++} END {print n+0}' "$WORK/owners.txt")"; fi
       [ "$NOT_ROOT" = 0 ] || fail "$NOT_ROOT package entr(ies) not owned by root:root (the root-owned install tree is the only marker defence for $KIND)"
-      pass "$KIND payload: every entry owned by root:root, so no unprivileged user can plant the test-mode marker"
+      pass "$KIND payload: all $(wc -l < "$WORK/owners.txt") entries owned by root:root, so no unprivileged user can plant the test-mode marker"
     fi ;;
   flatpak)
     L="$PAYLOAD/bin/$EXE_NAME"

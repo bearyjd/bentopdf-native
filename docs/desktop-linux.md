@@ -202,7 +202,9 @@ argv-policy condition dropped or loosened, `main.js` passing a constant) and req
 
 `process.env` reads are found by parsing the packaged sources (comments never count), not by grep. They must
 be exactly four known lines in `main.js`; a read appended to one of them, `process["env"]`, or
-`const { env } = process` is a different line or shape and fails. This replaced a grep that flagged the
+`const { env } = process` (or via `globalThis`/`global`) is a different line or shape and fails. The gate still
+never starts the artifact; the one thing it loads is the packaged `test-mode.js` / `argv-policy.js` (pure `node:fs`/`node:path`)
+into a throwaway node process. This replaced a grep that flagged the
 word in a comment in `argv-policy.js` and failed the Verify-artifacts job on `main` (workflow run
 40829280033); the earlier exemption pattern was also loose (any line containing `unsafeSwitches(`), which
 the exact-line match fixes. Mutation cases: a line or block comment mentioning `process.env` is accepted; a

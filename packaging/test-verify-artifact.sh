@@ -222,6 +222,8 @@ m_env_in_line_comment() { asar_edit "$1" src/argv-policy.js '1a // process.env i
 m_env_in_block_comment() { asar_edit "$1" src/menu.js '1a /* process.env, process.env.HOME: still only a comment */'; }
 m_env_on_exempt_line() { asar_edit "$1" src/main.js 's/^(const refused = unsafeSwitches\(process\.argv, process\.env, policyOptions\);)$/\1 const leak = process.env.HOME;/'; }
 m_env_on_exempt_line2() { asar_edit "$1" src/main.js 's/^(const overrides = app\.isPackaged \? \{\} : process\.env;)$/\1 const leak = process["env"].HOME;/'; }
+m_env_globalthis() { asar_edit "$1" src/menu.js '1a const leak = globalThis.process.env.HOME;'; }
+m_env_global() { asar_edit "$1" src/menu.js '1a const leak = global.process.env.HOME;'; }
 m_env_destructured() { asar_edit "$1" src/menu.js '1a const { env } = process;'; }
 m_env_override() { asar_edit "$1" src/main.js 's/app\.isPackaged \? \{\} : process\.env/process.env/'; }
 m_env_elsewhere() { asar_edit "$1" src/app.js '1a const leak = process.env.HOME;'; }
@@ -261,19 +263,19 @@ attempt_scripts() { # name kind file-in-scripts sed-expr|DELETE want
 }
 
 for k in $KINDS; do
-  attempt "remove LICENSES.chromium.html" $k m_rm_chromium_lic "missing or empty"
-  attempt "empty LICENSES.chromium.html" $k m_empty_chromium_lic "missing or empty"
-  attempt "remove LICENSE.electron.txt" $k m_rm_electron_lic "missing or empty"
-  attempt "remove NOTICE" $k m_rm_notice "missing or empty"
-  attempt "empty NOTICE" $k m_empty_notice "missing or empty"
-  attempt "remove SOURCE.txt" $k m_rm_source "missing or empty"
+  attempt "remove LICENSES.chromium.html" $k m_rm_chromium_lic "missing or empty: LICENSES.chromium.html"
+  attempt "empty LICENSES.chromium.html" $k m_empty_chromium_lic "missing or empty: LICENSES.chromium.html"
+  attempt "remove LICENSE.electron.txt" $k m_rm_electron_lic "missing or empty: LICENSE.electron.txt"
+  attempt "remove NOTICE" $k m_rm_notice "missing or empty: resources/NOTICE"
+  attempt "empty NOTICE" $k m_empty_notice "missing or empty: resources/NOTICE"
+  attempt "remove SOURCE.txt" $k m_rm_source "missing or empty: resources/SOURCE.txt"
   attempt "change SOURCE.txt commit" $k m_source_commit "does not name the built commit"
   attempt "SOURCE.txt says dirty=yes" $k m_source_dirty "was dirty"
   attempt "SOURCE.txt without repository URL" $k m_source_no_url "does not name the repository"
   attempt "SOURCE.txt without release tag line" $k m_source_no_tagline "no 'release tag:' line"
   attempt "SOURCE.txt without upstream commit" $k m_source_no_upstream "does not name the upstream commit"
   attempt "flip a fuse (RunAsNode on)" $k m_flip_fuse "RunAsNode"
-  attempt "remove all .desktop entries (empty glob)" $k m_rm_desktop "desktop"
+  attempt "remove all .desktop entries (empty glob)" $k m_rm_desktop "no .desktop file in the artifact"
   attempt "desktop entry loses MimeType" $k m_desktop_no_pdf "no MimeType=application/pdf"
   attempt "desktop Exec loses %f" $k m_desktop_no_percent_f "Exec does not end in %f"
   attempt "binary mode 0777" $k m_bin_0777 "group/world-writable"
@@ -305,6 +307,8 @@ for k in $KINDS; do
   attempt "process.env read appended to the argv-check line" $k m_env_on_exempt_line "not one of the known guarded lines"
   attempt "process[\"env\"] read appended to the overrides line" $k m_env_on_exempt_line2 "not one of the known guarded lines"
   attempt "const { env } = process destructuring" $k m_env_destructured "not one of the known guarded lines"
+  attempt "globalThis.process.env read" $k m_env_globalthis "not one of the known guarded lines"
+  attempt "global.process.env read" $k m_env_global "not one of the known guarded lines"
   attempt_ok "line comment mentioning process.env is accepted" $k m_env_in_line_comment
   attempt_ok "block comment mentioning process.env is accepted" $k m_env_in_block_comment
   attempt "argv policy not applied to own argv" $k m_argv_policy_gone "does not check its own argv"
@@ -324,17 +328,17 @@ for k in ${KINDS/flatpak/}; do
   attempt "chrome-sandbox mode 0700" $k m_sandbox_0700 "chrome-sandbox payload mode"
   attempt "chrome-sandbox missing" $k m_rm_sandbox "no chrome-sandbox helper"
 done
-attempt "--no-sandbox added to AppRun" appimage m_apprun_no_sandbox "forbidden flag"
+attempt "--no-sandbox added to AppRun" appimage m_apprun_no_sandbox "forbidden flag in AppRun"
 attempt "AppRun no longer unsets ELECTRON_DISABLE_SANDBOX" appimage m_apprun_no_unset "has no unset line"
 attempt "AppRun unset list loses CHROME_DEVEL_SANDBOX" appimage m_apprun_short_unset "does not unset CHROME_DEVEL_SANDBOX"
 attempt "AppRun unset list loses NODE_OPTIONS" appimage m_apprun_short_unset_tail "does not unset NODE_OPTIONS"
 attempt "AppRun no longer unsets BENTO_TEST_HEADLESS" appimage m_apprun_headless_kept "does not unset BENTO_TEST_HEADLESS"
-attempt "stock electron-builder AppRun" appimage m_apprun_stock "forbidden flag"
+attempt "stock electron-builder AppRun" appimage m_apprun_stock "forbidden flag in AppRun"
 for k in ${KINDS/flatpak/}; do
-  attempt "--no-sandbox added to the .desktop Exec" $k m_desktop_no_sandbox "forbidden flag"
+  attempt "--no-sandbox added to the .desktop Exec" $k m_desktop_no_sandbox "forbidden flag in "
 done
 if [ "$WITH_FLATPAK" = 1 ]; then
-  attempt "--no-sandbox added to the .desktop Exec" flatpak m_desktop_no_sandbox "forbidden flag"
+  attempt "--no-sandbox added to the .desktop Exec" flatpak m_desktop_no_sandbox "forbidden flag in "
   attempt "flatpak payload ships chrome-sandbox" flatpak m_flatpak_add_sandbox "contains chrome-sandbox"
   attempt "flatpak grants the plain x11 socket" flatpak m_flatpak_x11 "grants the plain x11 socket"
   attempt "flatpak does not remove the x11 socket" flatpak m_flatpak_no_nosocket "does not remove the x11 socket"
