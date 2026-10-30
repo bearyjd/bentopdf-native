@@ -73,84 +73,7 @@ jobs:
           bash scripts/check-dist.sh dist
           if [ -n "$(find dist -type l -print -quit)" ]; then echo "::error::dist/ contains a symlink"; exit 1; fi
 
-      # SMOKE flavour (issue #13): the same source with the real test mode, for the test-mode smoke checks only. No
-      # secret is in this step's environment and the build refuses to run if any signing variable is set
-      # (desktop/tools/flavour.js). Output: desktop/release-smoke/, named SMOKE-ONLY-NOT-FOR-DISTRIBUTION; never uploaded.
-      - name: Build SMOKE-flavour packages (test mode inside, never signed, never uploaded)
-        env:
-          BENTO_FLAVOUR: smoke
-        run: bash scripts/package-windows.sh
-
-      - name: Authenticode status (informational, unsigned builds are expected without secrets)
-        if: ${{ !cancelled() }}
-        shell: pwsh
-        run: |
-          Get-ChildItem desktop/release/*.exe | ForEach-Object {
-            $s = Get-AuthenticodeSignature $_.FullName
-            "$($_.Name): $($s.Status) $($s.SignerCertificate.Subject)" | Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          }
-
-      - name: Verify artifacts (extraction by 7-Zip)
-        if: ${{ !cancelled() }}
-        env:
-          IS_TAG: ${{ github.ref_type == 'tag' }}
-        run: |
-          flags=()
-          [ "$IS_TAG" = true ] && flags+=(--release)
-          # electron-builder does not write its effective config here; scan the resolved config object instead.
-          cfg="$(cygpath -u "$RUNNER_TEMP")/win-builder-config.json"
-          (cd desktop && node -e "require('fs').writeFileSync(process.argv[1], JSON.stringify(require('./electron-builder.win.config'), null, 1))" "$(cygpath -m "$cfg")")
-          for f in desktop/release/*-setup-*.exe desktop/release/*-portable-*.exe; do
-            [ -f "$f" ] || { echo "::error::no artifact matches the glob (got '$f')"; exit 1; }
-            bash packaging/verify-artifact-win.sh "${flags[@]}" --config "$cfg" "$f"
-          done
-          bash packaging/verify-artifact-win.sh "${flags[@]}" --config "$cfg" --tree desktop/release/win-unpacked --kind unpacked
-          # The smoke flavour is gated as what it is (--flavour smoke) and never with --release.
-          for f in desktop/release-smoke/*-setup-*.exe desktop/release-smoke/*-portable-*.exe; do
-            [ -f "$f" ] || { echo "::error::no smoke artifact matches the glob (got '$f')"; exit 1; }
-            bash packaging/verify-artifact-win.sh --flavour smoke "$f"
-          done
-          bash packaging/verify-artifact-win.sh --flavour smoke --tree desktop/release-smoke/win-unpacked --kind unpacked
-
-      - name: Mutation test of the gate
-        if: ${{ !cancelled() }}
-        run: |
-          bash packaging/test-verify-artifact-win.sh --seed desktop/release/win-unpacked --smoke-seed desktop/release-smoke/win-unpacked \
-            --installer "$(ls desktop/release/*-setup-*.exe)" --portable "$(ls desktop/release/*-portable-*.exe)"
-
-      - name: Install, smoke test and uninstall (runs the real installer on this runner)
-        if: ${{ !cancelled() }}
-        env:
-          IS_TAG: ${{ github.ref_type == 'tag' }}
-        run: |
-          flags=()
-          [ "$IS_TAG" = true ] && flags+=(--release)
-          bash packaging/windows/smoke-installer.sh "$(ls desktop/release/*-setup-*.exe)" "$(ls desktop/release/*-portable-*.exe)" "$(ls desktop/release-smoke/*-setup-*.exe)" "${flags[@]}"
-
-      # KNOWN FAILURE (issue #11): the portable exe's second instance does not forward its file, and the portable
-      # cannot enter test mode (its stub wipes the extraction directory, so no marker can be placed). The smoke
-      # script exits 3 ONLY for that signature (first instance healthy, second launch hung or forwarding
-      # unobservable); portable-second-step.sh turns 3 into a loud 'KNOWN FAILURE #11' summary line and a green
-      # step, and EVERYTHING else (crash, missing exe, any other exit code, a timeout elsewhere) into a red step.
-      # The installed second-instance checks stay BLOCKING in the smoke step above.
-      - name: Portable second-instance (issue #11: exit 3 = known, anything else = red)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 15
-        run: bash packaging/windows/portable-second-step.sh bash packaging/windows/smoke-installer.sh --portable-second-instance "$(ls desktop/release/*-portable-*.exe)"
-
-      - name: Lint
-        if: ${{ !cancelled() }}
-        working-directory: desktop
-        run: npm run lint
-
-      - name: Enforce unit test result
-        if: ${{ !cancelled() }}
-        run: |
-          [ "${{ steps.unit.outcome }}" = success ] || { echo "::error::desktop unit tests failed on Windows (outcome: ${{ steps.unit.outcome }})"; exit 1; }
-
-      # Release candidate: uploaded only after every gate above (verify, mutation test, install/smoke, lint, unit tests) passed.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ success() }}
         with:
           name: offline-bundle
           path: dist
@@ -285,7 +208,84 @@ jobs:
         working-directory: desktop/release
         run: sha256sum ./*.exe | tee SHA256SUMS
 
+      # SMOKE flavour (issue #13): the same source with the real test mode, for the test-mode smoke checks only. No
+      # secret is in this step's environment and the build refuses to run if any signing variable is set
+      # (desktop/tools/flavour.js). Output: desktop/release-smoke/, named SMOKE-ONLY-NOT-FOR-DISTRIBUTION; never uploaded.
+      - name: Build SMOKE-flavour packages (test mode inside, never signed, never uploaded)
+        env:
+          BENTO_FLAVOUR: smoke
+        run: bash scripts/package-windows.sh
+
+      - name: Authenticode status (informational, unsigned builds are expected without secrets)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          Get-ChildItem desktop/release/*.exe | ForEach-Object {
+            $s = Get-AuthenticodeSignature $_.FullName
+            "$($_.Name): $($s.Status) $($s.SignerCertificate.Subject)" | Tee-Object -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Verify artifacts (extraction by 7-Zip)
+        if: ${{ !cancelled() }}
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          flags=()
+          [ "$IS_TAG" = true ] && flags+=(--release)
+          # electron-builder does not write its effective config here; scan the resolved config object instead.
+          cfg="$(cygpath -u "$RUNNER_TEMP")/win-builder-config.json"
+          (cd desktop && node -e "require('fs').writeFileSync(process.argv[1], JSON.stringify(require('./electron-builder.win.config'), null, 1))" "$(cygpath -m "$cfg")")
+          for f in desktop/release/*-setup-*.exe desktop/release/*-portable-*.exe; do
+            [ -f "$f" ] || { echo "::error::no artifact matches the glob (got '$f')"; exit 1; }
+            bash packaging/verify-artifact-win.sh "${flags[@]}" --config "$cfg" "$f"
+          done
+          bash packaging/verify-artifact-win.sh "${flags[@]}" --config "$cfg" --tree desktop/release/win-unpacked --kind unpacked
+          # The smoke flavour is gated as what it is (--flavour smoke) and never with --release.
+          for f in desktop/release-smoke/*-setup-*.exe desktop/release-smoke/*-portable-*.exe; do
+            [ -f "$f" ] || { echo "::error::no smoke artifact matches the glob (got '$f')"; exit 1; }
+            bash packaging/verify-artifact-win.sh --flavour smoke "$f"
+          done
+          bash packaging/verify-artifact-win.sh --flavour smoke --tree desktop/release-smoke/win-unpacked --kind unpacked
+
+      - name: Mutation test of the gate
+        if: ${{ !cancelled() }}
+        run: |
+          bash packaging/test-verify-artifact-win.sh --seed desktop/release/win-unpacked --smoke-seed desktop/release-smoke/win-unpacked \
+            --installer "$(ls desktop/release/*-setup-*.exe)" --portable "$(ls desktop/release/*-portable-*.exe)"
+
+      - name: Install, smoke test and uninstall (runs the real installer on this runner)
+        if: ${{ !cancelled() }}
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          flags=()
+          [ "$IS_TAG" = true ] && flags+=(--release)
+          bash packaging/windows/smoke-installer.sh "$(ls desktop/release/*-setup-*.exe)" "$(ls desktop/release/*-portable-*.exe)" "$(ls desktop/release-smoke/*-setup-*.exe)" "${flags[@]}"
+
+      # KNOWN FAILURE (issue #11): the portable exe's second instance does not forward its file, and the portable
+      # cannot enter test mode (its stub wipes the extraction directory, so no marker can be placed). The smoke
+      # script exits 3 ONLY for that signature (first instance healthy, second launch hung or forwarding
+      # unobservable); portable-second-step.sh turns 3 into a loud 'KNOWN FAILURE #11' summary line and a green
+      # step, and EVERYTHING else (crash, missing exe, any other exit code, a timeout elsewhere) into a red step.
+      # The installed second-instance checks stay BLOCKING in the smoke step above.
+      - name: Portable second-instance (issue #11: exit 3 = known, anything else = red)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: bash packaging/windows/portable-second-step.sh bash packaging/windows/smoke-installer.sh --portable-second-instance "$(ls desktop/release/*-portable-*.exe)"
+
+      - name: Lint
+        if: ${{ !cancelled() }}
+        working-directory: desktop
+        run: npm run lint
+
+      - name: Enforce unit test result
+        if: ${{ !cancelled() }}
+        run: |
+          [ "${{ steps.unit.outcome }}" = success ] || { echo "::error::desktop unit tests failed on Windows (outcome: ${{ steps.unit.outcome }})"; exit 1; }
+
+      # Release candidate: uploaded only after every gate above (verify, mutation test, install/smoke, lint, unit tests) passed.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ success() }}
         with:
           name: ${{ github.ref_type == 'tag' && 'bentopdf-native-windows-x64' || format('bentopdf-native-windows-x64-NOT-FOR-RELEASE-{0}-unresolved-notice-lines', steps.notice.outputs.count) }}
           path: |
