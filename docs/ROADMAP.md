@@ -205,7 +205,7 @@ without: shell UI served from `app.asar` (`bento://shell`, 129 tools
 rendered), tool tab isolated, renderers sandboxed, hostile `BENTO_*` env ignored,
 second instance forwards its PDF. deb, rpm, Flatpak, macOS, Windows: not built.
 
-**Packaged, after the test-mode marker (S4, AppImage rebuilt from 887aeed with electron-builder + harden,
+**Packaged, after the test-mode marker (S4; figures here predate #13 ("pre-#13"), AppImage rebuilt from 887aeed with electron-builder + harden,
 deb/rpm not built: fpm fails here on a missing libcrypt.so.1):** `verify-artifact.sh --expect-commit 887aeed`
 VERIFIED (14 ok lines incl. the new no-marker check; same "not for release" NOTICE note); with a marker
 added to a real extracted tree (resources/, root, symlink) the gate FAILS in all 3 cases.
@@ -347,7 +347,7 @@ Linux with no Wine, so only a GitHub Actions run on `windows-latest` can prove a
 only or partly, `[ ]` means not shown. Ticks are updated from the last run, not from intent.
 
 - [x] NSIS installer (per-user, not one-click, choosable folder, desktop and Start-menu shortcuts), portable exe: built, installed
-  silently, run, uninstalled on `windows-latest` (runs 40845803115 and 40853355808; installed smoke 24/24 in the later run). Installer and portable exe both pass the Windows gate by 7-Zip extraction.
+  silently, run, uninstalled on `windows-latest` (runs 40845803115 and 40853355808; installed smoke 24/24 in the later run; pre-#13 figures). Installer and portable exe both pass the Windows gate by 7-Zip extraction.
 - [~] `.pdf` registered under `OpenWithProgids` only (no default takeover), removed on uninstall: proven in those runs (40845803115, 40853355808).
   Launch-with-a-PDF as a shell document tab: proven. **Second-instance forwarding: proven on the installed app for single-argument launches (run 40845803115, marker-gated test mode); portable exe: NOT VERIFIED, known failure (issue #11); multi-argument launches (`[file URL, UNC path]` and `[path with space, file URL, UNC path]`) can crash the installed app before `main.js` (open, tracking issue #14, not produced by Explorer's single `"%1"`).**
   UNC refusal, drive letters, `file:///C:/`, long paths: unit tests only.
@@ -355,8 +355,8 @@ only or partly, `[ ]` means not shown. Ticks are updated from the last run, not 
   `BENTO_*` ignored when packaged.
 - [~] Same hardening as Linux: fuses via the shared `afterPack` (checked on the real exe in CI), WASM outside the asar, `/switch` treated as a switch on win32
   (from the Chromium source, not measured), Windows path rules for static files (lexical unit tests; real NTFS not tested).
-- [x] Windows release gate (`verify-artifact-win.sh`) and its mutation test (60 caught, 0 missed, 1 skipped (Git Bash cannot make symlinks) in run 40845803115; passes on the real installer and portable exe in CI), including the win32 test-mode marker checks and marker absence.
-- [x] CI workflow `desktop-windows.yml`: runs 40845803115 (replay) and 40853355808 (after review fixes, head 9d6b8e8) green on `feat/m5-windows-on-main`; the portable second-instance check (issue #11) is a separate non-blocking step listed as a KNOWN FAILURE, NOT VERIFIED.
+- [x] Windows release gate (`verify-artifact-win.sh`) and its mutation test (pre-#13 figure: 60 caught, 0 missed, 1 skipped (Git Bash cannot make symlinks) in run 40845803115; passes on the real installer and portable exe in CI), including the win32 test-mode marker checks and marker absence.
+- [x] CI workflow `desktop-windows.yml` (pre-#13 runs): runs 40845803115 (replay) and 40853355808 (after review fixes, head 9d6b8e8) green on `feat/m5-windows-on-main`; the portable second-instance check (issue #11) is a separate non-blocking step listed as a KNOWN FAILURE, NOT VERIFIED.
 - [ ] Code signing: optional via secrets (main pushes and v* tags only), never exercised. Unsigned builds trigger SmartScreen again for every new version; see docs/desktop-windows.md. Issue #13 (compile test mode out of release builds) is fixed by the feat/t13-smoke-flavour PR: release builds carry no test mode; only they are built in the signing step.
 - [ ] A release: `NOTICE` has unresolved lines (now including NSIS and Windows Electron DLLs), so tag builds fail by design.
 - [ ] A visible window on Windows (only the hidden test mode was ever run), real Explorer double-click, all-users install, upgrade install.

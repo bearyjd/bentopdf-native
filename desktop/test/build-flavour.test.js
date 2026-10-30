@@ -24,6 +24,8 @@ test('BENTO_FLAVOUR: unset or empty is release; smoke; anything else throws', ()
 });
 
 test('a smoke build refuses any signing material in the environment; a release build does not care', () => {
+  for (const key of ['CSC_NAME', 'CSC_KEY', 'CSC_INSTALLER_LINK', 'WIN_CSC_NAME', 'CSC_IDENTITY_AUTO_DISCOVERY', 'AZURE_CLIENT_CERTIFICATE_PATH',
+    'AZURE_CLIENT_CERTIFICATE_PASSWORD', 'AZURE_FEDERATED_TOKEN_FILE', 'AZURE_USERNAME', 'AZURE_PASSWORD']) assert.ok(SIGNING_ENV.includes(key), key);
   for (const key of SIGNING_ENV) {
     assert.throws(() => flavourOf({ BENTO_FLAVOUR: 'smoke', [key]: 'x' }), new RegExp(key));
     assert.equal(flavourOf({ [key]: 'x' }), 'release');

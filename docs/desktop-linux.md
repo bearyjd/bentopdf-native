@@ -446,7 +446,7 @@ controls). Not needed on a normal desktop.
 ## Gate integrity
 
 `packaging/test-verify-artifact.sh` extracts a deb, rpm, AppImage and the Flatpak build tree, then
-for each of ~170 mutations makes a copy, breaks one thing and asserts that `verify-artifact.sh`
+for each mutation case makes a copy, breaks one thing and asserts that `verify-artifact.sh`
 fails (after a positive control that the unmodified trees pass): missing/empty licence files, NOTICE
 or SOURCE.txt; wrong SOURCE.txt commit, dirty flag, repository URL, tag line; a flipped fuse;
 `--no-sandbox` in AppRun or a desktop Exec; 0777/0666/group-writable files and directories; setuid

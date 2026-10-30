@@ -112,7 +112,7 @@ trace(`start pid=${process.pid} ppid=${process.ppid} exec=${process.execPath} ar
 process.on('exit', (code) => trace(`process exit code=${code}`));
 
 function installMenu() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ showAbout, openSource, devtools: !app.isPackaged })));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ showAbout, openSource, devtools: !app.isPackaged && flavour !== 'release' })));
 }
 
 /** Rebuilt when the recent-files list changes (Open Recent submenu). */
@@ -121,7 +121,7 @@ function installShellMenu(menuActions, recents) {
   const key = JSON.stringify(recents);
   if (key === menuRecents) return;
   menuRecents = key;
-  const template = buildShellMenuTemplate({ ...menuActions, showAbout, openSource }, { recents, devtools: !app.isPackaged });
+  const template = buildShellMenuTemplate({ ...menuActions, showAbout, openSource }, { recents, devtools: !app.isPackaged && flavour !== 'release' });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 

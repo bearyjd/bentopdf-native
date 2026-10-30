@@ -290,14 +290,14 @@ and tags. Earlier evidence from the pre-main branch (runs 40805536068 ... 408136
 - **Marker-gated test mode on the installed copy:** without the marker the test switches are refused (exit 2, no debug
   port); with the marker written into the disposable installed copy the app enters test mode (hidden window); the marker
   is removed again and asserted absent before the uninstall assertions.
-- Installed app in test mode (24/24 checks): `bento://app` loads, `crossOriginIsolated`, no external requests, no Node
+- Installed app in test mode (24/24 checks, pre-#13 figure): `bento://app` loads, `crossOriginIsolated`, no external requests, no Node
   globals, tool page has no shell bridge, `BENTO_*` ignored, renderer `sandboxed: true` at `untrusted` integrity, the
   launch-argument PDF opens as a document tab of the shell, the shell UI is served from the asar (129 tools); second
   instance (single-argument launches, as the registered `"%1"` produces), each with positive evidence in the event log:
   a backslash path with a space and non-ASCII and a `file:///C:/...` URL become document tabs, a UNC path
   `\\127.0.0.1\c$\...` is delivered and refused, Windows' injected argv passes the switch policy; `/no-sandbox` exits 2.
 - Portable exe without test mode: test switches refused (exit 2), `/no-sandbox` refused (exit 2), no registry/shortcut traces.
-- Unit tests on Windows: 231 tests, 212 pass, 0 fail, 19 skipped with stated reasons (POSIX-only FIFOs, mode bits and the POSIX
+- Unit tests on Windows (pre-#13 figures): 231 tests, 212 pass, 0 fail, 19 skipped with stated reasons (POSIX-only FIFOs, mode bits and the POSIX
   marker branch); the real-file win32 marker test ran and passed. `windows`, `brand`, `headers`: 69 pass. Lint passes.
 
 **Failing / not proven**

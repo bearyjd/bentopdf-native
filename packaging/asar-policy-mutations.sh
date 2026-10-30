@@ -28,6 +28,8 @@ RELEASE_MUTATIONS=(
   "release: stub accepts test switches|test-mode.js|s/const isTestSwitch = () => false;/const isTestSwitch = () => true; \/* MUTATED *\//"
   "release: argv flavour rule dropped|argv-policy.js|s/return TEST_FLAVOURS.has(flavour) \&\& /return \/* MUTATED *\/ /"
   "release: release added to the test flavours|argv-policy.js|s/new Set(\['dev', 'smoke'\]);/new Set(['dev', 'smoke', 'release']); \/* MUTATED *\//"
+  "release: DevTools gate dropped from app.js|app.js|s/allowDevtools: !app.isPackaged \&\& flavour !== 'release',/allowDevtools: !app.isPackaged, \/* MUTATED *\//"
+  "release: DevTools gate dropped from shell-app.js|shell/shell-app.js|s/allowDevtools: !app.isPackaged \&\& flavour !== 'release',/allowDevtools: !app.isPackaged, \/* MUTATED *\//"
   "release: debug-port literal in main.js code|main.js|s/^'use strict';$/'use strict'; const x = '-remote-debugging-port=0'; \/* MUTATED *\//"
 )
 

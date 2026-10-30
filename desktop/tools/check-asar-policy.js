@@ -36,6 +36,11 @@ if (require(path.join(src, 'build-flavour.js')).flavour !== FLAVOUR) fail(`build
 for (const needle of ["const TEST_FLAVOURS = new Set(['dev', 'smoke']);", 'return TEST_FLAVOURS.has(flavour) && testHeadless(env) && ']) {
   if (!(packed('argv-policy.js') || '').includes(needle)) fail(`build flavour: argv-policy.js lost the flavour rule: ${needle}`);
 }
+// DevTools never open in a release build, even when app.isPackaged is false (issue #13).
+for (const [file, needle] of [['main.js', 'devtools: !app.isPackaged && flavour !== \'release\''], ['app.js', 'allowDevtools: !app.isPackaged && flavour !== \'release\''], [path.join('shell', 'shell-app.js'), 'allowDevtools: !app.isPackaged && flavour !== \'release\'']]) {
+  const text = packed(file) || '';
+  if (!text.includes(needle)) fail(`build flavour: src/${file} lost the release DevTools gate: ${needle}`);
+}
 const isStub = packed('test-mode.js') === readOr(path.join(FLAVOUR_DIR, 'release', 'test-mode.js'));
 // Code tokens that exist only for test mode. Comments are not tokens: argv-policy.js may still EXPLAIN the refusal.
 const TEST_TOKENS = ['remote-debugging', 'ozone-platform=headless', 'user-data-dir', 'bento-test-mode', 'BENTO_TEST_HEADLESS', 'BENTO_TEST_TRACE_DIR', 'hasTestMarkerWin32'];

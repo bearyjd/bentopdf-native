@@ -14,7 +14,9 @@ const FLAVOURS = ['release', 'smoke'];
 const FLAVOUR_DIR = path.join(__dirname, '..', 'flavours');
 // Signing material electron-builder picks up from the environment: a smoke build must never see any of it.
 const SIGNING_ENV = ['CSC_LINK', 'CSC_KEY_PASSWORD', 'WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD', 'AZURE_SIGN_ENDPOINT',
-  'AZURE_SIGN_ACCOUNT', 'AZURE_SIGN_PROFILE', 'AZURE_SIGN_PUBLISHER', 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET'];
+  'AZURE_SIGN_ACCOUNT', 'AZURE_SIGN_PROFILE', 'AZURE_SIGN_PUBLISHER', 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
+  'CSC_NAME', 'CSC_KEY', 'CSC_INSTALLER_LINK', 'WIN_CSC_NAME', 'CSC_IDENTITY_AUTO_DISCOVERY', 'AZURE_CLIENT_CERTIFICATE_PATH',
+  'AZURE_CLIENT_CERTIFICATE_PASSWORD', 'AZURE_FEDERATED_TOKEN_FILE', 'AZURE_USERNAME', 'AZURE_PASSWORD'];
 
 /** BENTO_FLAVOUR: unset or empty means release; anything other than release / smoke is an error. */
 function flavourOf(env = process.env) {
