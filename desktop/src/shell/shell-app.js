@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
 const brand = require('../../brand.json');
+const { flavour } = require('../build-flavour');
 const { buildAppHeaders } = require('../headers');
 const { installFailureHandlers } = require('../failure');
 const { registerIpc } = require('../ipc');
@@ -60,7 +61,7 @@ async function startShell(options) {
   const logLimited = createLimitedLogger(log);
   const prepared = new WeakSet();
   const observers = (partition) => ({
-    allowDevtools: !app.isPackaged,
+    allowDevtools: !app.isPackaged && flavour !== 'release',
     extraAllowed,
     onBlocked: (url) => {
       pushCapped(blocked, { partition, url });

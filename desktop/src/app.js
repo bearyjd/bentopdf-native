@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
+const { flavour } = require('./build-flavour');
 const { buildAppHeaders } = require('./headers');
 const { installFailureHandlers } = require('./failure');
 const { registerIpc } = require('./ipc');
@@ -54,7 +55,7 @@ async function startApp(options) {
       onBlocked(url);
     },
     {
-      allowDevtools: !app.isPackaged,
+      allowDevtools: !app.isPackaged && flavour !== 'release',
       extraAllowed,
       onPermission: (decision) => {
         permissionDecisions.push(decision);

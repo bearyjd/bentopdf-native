@@ -6,13 +6,17 @@
 // offline bundle as an extraResource OUTSIDE the asar (Range reads, no 4 GiB
 // asar-offset concerns, no unpack-on-read copies).
 const brand = require('./brand.json');
+const { appFiles, flavourOf, nameTag, outputDir } = require('./tools/flavour');
+
+// BENTO_FLAVOUR=release (default) | smoke (tools/flavour.js, issue #13).
+const flavour = flavourOf();
 
 module.exports = {
   appId: brand.appId,
   productName: brand.productName,
   copyright: 'Copyright (C) 2026 bearyjd and contributors. AGPL-3.0-only.',
-  artifactName: `${brand.executableName}-\${version}-\${arch}.\${ext}`,
-  directories: { output: 'release' },
+  artifactName: `${brand.executableName}${nameTag(flavour)}-\${version}-\${arch}.\${ext}`,
+  directories: { output: outputDir(flavour) },
   electronDist: 'node_modules/electron/dist',
   electronVersion: '45.1.0',
   npmRebuild: false,
@@ -22,7 +26,7 @@ module.exports = {
   afterPack: 'tools/after-pack.js',
   // The window class / Wayland app_id comes from desktopName in package.json.
   extraMetadata: { desktopName: `${brand.appId}.desktop`, homepage: brand.sourceUrl },
-  files: ['package.json', 'brand.json', 'src/**/*', '!**/*.map'],
+  files: appFiles(flavour),
   extraResources: [
     { from: '../dist', to: 'dist', filter: ['**/*'] },
     { from: '../LICENSE', to: 'LICENSE' },

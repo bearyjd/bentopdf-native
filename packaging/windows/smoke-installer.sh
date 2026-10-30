@@ -2,16 +2,18 @@
 # Windows lifecycle smoke test, for a CI runner (Git Bash on windows-latest). It INSTALLS, runs and
 # UNINSTALLS the real artifacts on the machine it runs on: do not run it on a workstation.
 #
-#   packaging/windows/smoke-installer.sh <setup.exe> <portable.exe> [--expect-commit SHA] [--release]
+#   packaging/windows/smoke-installer.sh <setup.exe> <portable.exe> <SMOKE-flavour setup.exe> [--expect-commit SHA] [--release]
 #   packaging/windows/smoke-installer.sh --portable-second-instance <portable.exe>
 #
 # Steps: silent per-user install to a temp dir that already holds a canary file; assert files, shortcuts (no sandbox flags), registry
 # (ProgID + OpenWithProgids only, the .pdf default untouched); run the release gate on the installed
-# tree (no marker yet); run the headless packaged smoke test, which proves the copy refuses test mode without
-# the marker, then creates the test-mode marker in this disposable installed copy only and removes it again;
-# assert the marker is gone; silent uninstall; assert the app files, shortcuts and keys are gone and the canary survived; then the portable exe:
+# tree (no marker yet); run the packaged smoke test in --mode release-refusal: the RELEASE flavour has no test mode,
+# so with the env AND a planted marker, started as itself and as electron.exe, it must still refuse the test
+# switches (issue #13); assert the marker is gone; silent uninstall; assert the app files, shortcuts and keys are gone and the canary survived; then the portable exe:
 # the checks that need no test mode (its stub wipes the extraction directory, so no marker can be placed) and
-# no registry/shortcut traces. Every check runs; the exit status is non-zero if any failed. Results are also
+# no registry/shortcut traces. Between the two, the SMOKE-flavour installer (built from the same source, test mode
+# inside, never distributed) is installed to another directory, gated with --flavour smoke, put through the full
+# test-mode smoke (marker created in that disposable copy only and removed again) and uninstalled. Every check runs; the exit status is non-zero if any failed. Results are also
 # appended to $GITHUB_STEP_SUMMARY when set.
 # --portable-second-instance runs only the portable second-instance part (a KNOWN FAILURE, issue #11; the
 # workflow runs it through portable-second-step.sh: exit 3 = the known #11 signature, anything else is red).
@@ -25,9 +27,12 @@ if [ "${1:-}" = --portable-second-instance ]; then
   node "$(cygpath -m "$ROOT/desktop/test/packaged-smoke-win.js")" "$(cygpath -w "$PORTABLE")" --portable --mode second-instance-only
   exit $?
 fi
-SETUP="${1:?usage: smoke-installer.sh <setup.exe> <portable.exe> [--expect-commit SHA] [--release]}"
-PORTABLE="${2:?usage: smoke-installer.sh <setup.exe> <portable.exe>}"
-shift 2
+SETUP="${1:?usage: smoke-installer.sh <setup.exe> <portable.exe> <smoke-setup.exe> [--expect-commit SHA] [--release]}"
+PORTABLE="${2:?usage: smoke-installer.sh <setup.exe> <portable.exe> <smoke-setup.exe>}"
+SMOKE_SETUP="${3:?usage: smoke-installer.sh <setup.exe> <portable.exe> <smoke-setup.exe>}"
+case "$(basename "$SMOKE_SETUP")" in *SMOKE-ONLY-NOT-FOR-DISTRIBUTION*) ;; *) echo "the third argument must be the SMOKE-flavour installer" >&2; exit 2 ;; esac
+case "$(basename "$SETUP") $(basename "$PORTABLE")" in *SMOKE-ONLY*) echo "the release installer/portable must not be SMOKE-flavour artifacts" >&2; exit 2 ;; esac
+shift 3
 GATE_ARGS=("$@")
 # Git for Windows is a native program: give it a Windows path (arguments are not converted, see above).
 HEAD_COMMIT="$(git -C "$(cygpath -m "$ROOT")" rev-parse HEAD)"
@@ -101,8 +106,8 @@ if [ "$(pdf_default)" = "$DEFAULT_BEFORE" ]; then note "ok   the HKCU .pdf defau
 
 # ---- gate and smoke on the installed tree ---------------------------------------------------------
 check "release gate on the installed tree" bash "$ROOT/packaging/verify-artifact-win.sh" --expect-commit "$HEAD_COMMIT" "${GATE_ARGS[@]}" --tree "$INSTALL_DIR" --kind installed
-note "--- packaged smoke (installed app)"
-if node "$(native "$ROOT/desktop/test/packaged-smoke-win.js")" "$(win "$EXE")" | tee "$TMPROOT/smoke-installed.log"; then note "ok   packaged smoke (installed)"; else note "FAIL packaged smoke (installed)"; FAILED=$((FAILED + 1)); fi
+note "--- packaged smoke (installed RELEASE app: test mode must not exist)"
+if node "$(native "$ROOT/desktop/test/packaged-smoke-win.js")" "$(win "$EXE")" --mode release-refusal | tee "$TMPROOT/smoke-installed.log"; then note "ok   packaged smoke (installed, release refusal)"; else note "FAIL packaged smoke (installed, release refusal)"; FAILED=$((FAILED + 1)); fi
 [ -z "${GITHUB_STEP_SUMMARY:-}" ] || { echo '```'; cat "$TMPROOT/smoke-installed.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 check "the test-mode marker is gone from the installed tree before uninstall" absent exists "$INSTALL_DIR/resources/.bento-test-mode"
 
@@ -119,6 +124,22 @@ check "start menu shortcut removed" absent exists "$START_LNK"
 check "ProgID key removed" absent reg_key "$PROGID_KEY"
 check "OpenWithProgids value removed" absent reg_value "$OPENWITH_KEY" "$APP_ID.pdf"
 if [ "$(pdf_default)" = "$DEFAULT_BEFORE" ]; then note "ok   the HKCU .pdf default value is the same after uninstall"; else note "FAIL the HKCU .pdf default value differs after uninstall: $(pdf_default)"; FAILED=$((FAILED + 1)); fi
+# ---- SMOKE flavour: install, gate, full test-mode smoke, uninstall ----------------------------------------
+SMOKE_DIR="$TMPROOT/smoke install"
+SMOKE_EXE="$SMOKE_DIR/$PRODUCT.exe"
+"$SMOKE_SETUP" /S "/D=$(win "$SMOKE_DIR")" >"$TMPROOT/smoke-install.log" 2>&1
+note "smoke installer exit status: $?"
+for _ in $(seq 1 60); do [ -s "$SMOKE_EXE" ] && break; sleep 2; done
+check "smoke flavour: installed executable exists" exists "$SMOKE_EXE"
+check "smoke flavour: gate (--flavour smoke) on the installed tree" bash "$ROOT/packaging/verify-artifact-win.sh" --expect-commit "$HEAD_COMMIT" --flavour smoke --tree "$SMOKE_DIR" --kind installed
+note "--- packaged smoke (installed SMOKE-flavour app, test mode)"
+if node "$(native "$ROOT/desktop/test/packaged-smoke-win.js")" "$(win "$SMOKE_EXE")" | tee "$TMPROOT/smoke-smoke.log"; then note "ok   packaged smoke (installed smoke flavour)"; else note "FAIL packaged smoke (installed smoke flavour)"; FAILED=$((FAILED + 1)); fi
+[ -z "${GITHUB_STEP_SUMMARY:-}" ] || { echo '```'; cat "$TMPROOT/smoke-smoke.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+check "smoke flavour: the test-mode marker is gone before uninstall" absent exists "$SMOKE_DIR/resources/.bento-test-mode"
+"$SMOKE_DIR/Uninstall $PRODUCT.exe" /S >"$TMPROOT/smoke-uninstall.log" 2>&1
+for _ in $(seq 1 90); do [ ! -e "$SMOKE_EXE" ] && ! uninstall_entry && break; sleep 2; done
+check "smoke flavour: executable removed by the uninstaller" absent exists "$SMOKE_EXE"
+check "smoke flavour: uninstall registry entry removed" absent uninstall_entry
 
 # ---- portable ----------------------------------------------------------------------------------------
 PORT_DIR="$TMPROOT/portable"

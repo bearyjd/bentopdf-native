@@ -1,7 +1,10 @@
 'use strict';
 
 // Headless smoke test of a PACKAGED Windows build (installed tree, win-unpacked or portable exe).
-//   node test/packaged-smoke-win.js <path-to-exe> [--resources <dir>] [--portable] [--mode full|no-second-instance|second-instance-only]
+//   node test/packaged-smoke-win.js <path-to-exe> [--resources <dir>] [--portable] [--mode full|no-second-instance|second-instance-only|release-refusal]
+// Build flavours (issue #13): the test-mode modes (full, no-second-instance) need a SMOKE-flavour build. A RELEASE build
+// has no test mode at all: --mode release-refusal writes the marker, sets the env and proves the test switches are
+// still refused, started as itself and as electron.exe (which makes app.isPackaged false), then removes both again.
 // A packaged build honours test mode only with BENTO_TEST_HEADLESS=1 AND the marker <resources>\.bento-test-mode
 // (src/test-mode.js). This runner first proves that WITHOUT the marker the test switches are refused, then writes
 // the marker into <resources> (default: next to the exe), runs the checks, and REMOVES the marker again (checked)
@@ -28,8 +31,8 @@ const opt = (name, fallback) => { const i = process.argv.indexOf(name); return i
 const portable = process.argv.includes('--portable');
 const mode = opt('--mode', 'full');
 const resources = opt('--resources', path.join(path.dirname(exe || '.'), 'resources'));
-if (!exe || process.platform !== 'win32' || !['full', 'no-second-instance', 'second-instance-only'].includes(mode)) {
-  process.stderr.write('usage (Windows only): packaged-smoke-win.js <exe> [--resources <dir>] [--portable] [--mode full|no-second-instance|second-instance-only]\n');
+if (!exe || process.platform !== 'win32' || !['full', 'no-second-instance', 'second-instance-only', 'release-refusal'].includes(mode)) {
+  process.stderr.write('usage (Windows only): packaged-smoke-win.js <exe> [--resources <dir>] [--portable] [--mode full|no-second-instance|second-instance-only|release-refusal]\n');
   process.exit(2);
 }
 const marker = path.join(resources, MARKER_NAME);
@@ -72,8 +75,8 @@ const baseEnv = () => ({
   ELECTRON_LOG_FILE: path.join(traceDir, `chromium-launch${++launchCount}.log`),
 });
 const testArgs = [`--user-data-dir=${profile}`];
-function launch(args, { testMode = true } = {}) {
-  const child = spawn(exe, args, {
+function launch(args, { testMode = true, file = exe } = {}) {
+  const child = spawn(file, args, {
     stdio: ['ignore', 'ignore', 'pipe'],
     windowsHide: true,
     env: testMode ? { ...baseEnv(), BENTO_TEST_HEADLESS: '1' } : baseEnv(),
@@ -191,6 +194,28 @@ async function refusedWithoutMarker() {
   check('WITHOUT the marker the test switches are refused (exit 2, no DevToolsActivePort)', exited.code === 2 && !port && (bare.stderr === '' || /unsafe switch/.test(bare.stderr)), `exit=${exited.code} port=${port} ${bare.stderr.slice(0, 160).replace(/\s+/g, ' ')}`);
 }
 
+// RELEASE flavour: env AND a valid marker, started as itself and as electron.exe: the test switches stay refused.
+async function releaseRefusal() {
+  const renamed = path.join(path.dirname(exe), 'electron.exe');
+  if (fs.existsSync(renamed)) throw new Error(`${renamed} already exists: refusing to run against a tree that is not disposable`);
+  writeMarker();
+  try {
+    for (const [label, file] of [['as itself', exe], ['as electron.exe (app.isPackaged false)', renamed]]) {
+      if (file === renamed) fs.linkSync(exe, renamed);
+      const prof = path.join(work, `profile-release-${path.basename(file, '.exe')}`);
+      const run = launch([`--user-data-dir=${prof}`, '--remote-debugging-port=0'], { file });
+      const exited = await until(() => run.child.exitCode !== null && { code: run.child.exitCode }, 90000, 'exit').catch(() => ({ code: 'timeout' }));
+      killTree(run.child);
+      const port = fs.existsSync(path.join(prof, 'DevToolsActivePort'));
+      check(`RELEASE ${label} WITH env AND marker refuses the test switches (exit 2, no DevToolsActivePort)`, exited.code === 2 && !port && (run.stderr === '' || /unsafe switch/.test(run.stderr)), `exit=${exited.code} port=${port} ${run.stderr.slice(0, 160).replace(/\s+/g, ' ')}`);
+    }
+  } finally {
+    try { fs.rmSync(renamed, { force: true }); } catch (err) { process.stdout.write(`electron.exe removal failed: ${err.message}\n`); }
+    check('the electron.exe hard link was removed again', !fs.existsSync(renamed), renamed);
+    removeMarker();
+  }
+}
+
 function writeMarker() {
   if (fs.existsSync(marker)) throw new Error(`a marker already exists at ${marker}: refusing to run against a tree that is not disposable`);
   fs.mkdirSync(resources, { recursive: true });
@@ -294,7 +319,10 @@ async function portableSecondInstance() {
 async function main() {
   process.stdout.write(`packaged smoke: ${exe} mode=${mode}${portable ? ' (portable)' : ''} marker=${portable ? '(none: portable)' : marker}\n`);
   if (mode !== 'second-instance-only') await refusedWithoutMarker();
-  if (portable) {
+  if (mode === 'release-refusal') {
+    if (portable) throw new Error('--mode release-refusal needs an installed or unpacked tree (the portable stub wipes its directory)');
+    await releaseRefusal();
+  } else if (portable) {
     const groups = { 'no-second-instance': ['page checks in test mode (isolation, no external requests, no Node globals, sandbox level, open-with document tab, shell UI)'],
       'second-instance-only': ['second-instance forwarding (issue #11)'] };
     notVerified.push(...(groups[mode] || [...groups['no-second-instance'], ...groups['second-instance-only']]).map((g) => `portable: ${g}: the stub wipes its extraction directory before every launch, so the test-mode marker cannot be placed`));

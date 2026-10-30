@@ -75,7 +75,7 @@ jobs:
         working-directory: desktop
         run: |
           npm run lint
-          node --test --test-concurrency=1 test/open-file.test.js test/argv-policy.test.js test/normalise-modes.test.js test/brand.test.js test/ipc.test.js test/security.test.js test/headers.test.js test/static-files.test.js test/transport-http.test.js
+          node --test --test-concurrency=1 test/open-file.test.js test/argv-policy.test.js test/normalise-modes.test.js test/brand.test.js test/ipc.test.js test/security.test.js test/headers.test.js test/static-files.test.js test/transport-http.test.js test/build-flavour.test.js test/test-mode.test.js
 
       - name: Mutation test of the NOTICE check
         run: bash packaging/test-check-notice.sh
@@ -97,6 +97,13 @@ jobs:
       - name: Build packages (builds the offline bundle first when dist/ is missing)
         run: bash scripts/package-linux.sh
 
+      # SMOKE flavour (issue #13): the same source with the real test mode, AppImage only, into desktop/release-smoke/
+      # (named SMOKE-ONLY-NOT-FOR-DISTRIBUTION). Gated with --flavour smoke and used by the gate's mutation test; never uploaded.
+      - name: Build the SMOKE-flavour AppImage (never uploaded)
+        env:
+          BENTO_FLAVOUR: smoke
+        run: bash scripts/package-linux.sh
+
       - name: Verify artifacts
         # Tag builds add --release: clean tree, release tag in SOURCE.txt, zero unresolved NOTICE lines.
         # The Flatpak is not built or gated in CI (see docs/desktop-linux.md).
@@ -107,6 +114,11 @@ jobs:
           [ "$IS_TAG" = true ] && flags+=(--release)
           for f in desktop/release/*.AppImage desktop/release/*.deb desktop/release/*.rpm; do
             bash packaging/verify-artifact.sh "${flags[@]}" "$f"
+          done
+          # The smoke flavour is gated as what it is, never with --release.
+          for f in desktop/release-smoke/*.AppImage; do
+            [ -f "$f" ] || { echo "::error::no smoke AppImage (got '$f')"; exit 1; }
+            bash packaging/verify-artifact.sh --flavour smoke "$f"
           done
 
       - name: Mutation test of the gate

@@ -158,27 +158,66 @@ like their double-dash forms. Matching is case-sensitive and exact, so `-no-sand
 `--no-zygote`, `--renderer-cmd-prefix`, `--browser-subprocess-path`, `--user-data-dir`,
 `--proxy-server`, `--allow-file-access-from-files`, `--enable-features=`/`--disable-features=`,
 `--disable-blink-features` and the rest are all refused (unit-tested). A bare `--` ends the options:
-what follows is a file argument and still goes through the open-with validation. Only when
-`BENTO_TEST_HEADLESS=1` is in the environment **and** (for a packaged build) the test-mode marker exists
-(next section) are `--ozone-platform=headless`, `--remote-debugging-port=<n>`,
+what follows is a file argument and still goes through the open-with validation. Only in a test flavour (an unpackaged
+run, or a packaged SMOKE build, next section), with `BENTO_TEST_HEADLESS=1` in the environment **and** (for a
+packaged build) the test-mode marker, are `--ozone-platform=headless`, `--remote-debugging-port=<n>`,
 `--remote-debugging-pipe` and `--user-data-dir=<dir>` also accepted; that is how the test harnesses drive
-Electron. The AppRun and Flatpak launcher unset `BENTO_TEST_HEADLESS`, `BENTO_DIST` and `BENTO_TRANSPORT`
+Electron. A RELEASE build has no test-only switch at all. The AppRun and Flatpak launcher unset `BENTO_TEST_HEADLESS`, `BENTO_DIST` and `BENTO_TRANSPORT`
 for every normal launch.
 
-### Packaged test mode (marker file)
+### Build flavours: release builds have no test mode (issue #13)
 
-PR #8 made packaged builds ignore `BENTO_TEST_HEADLESS`, which broke the packaged smoke test. It now
-works like this: a packaged build honours test mode only if **both** the environment variable is `1`
+Every build is one of two flavours, selected by `BENTO_FLAVOUR` when packaging (`desktop/tools/flavour.js`):
+
+| Flavour | How | `src/test-mode.js` in `app.asar` | Output |
+|---|---|---|---|
+| **release** (default) | `npm run dist:linux` | the stub `desktop/flavours/release/test-mode.js`: `hasTestMarker`, `isTestSwitch`, `testHeadless` return false, `testTraceDir` undefined | `desktop/release/` (the only artifacts CI uploads) |
+| **smoke** | `BENTO_FLAVOUR=smoke npm run dist:linux` (AppImage only) | the real marker logic, as committed | `desktop/release-smoke/`, file names carry `SMOKE-ONLY-NOT-FOR-DISTRIBUTION`; never uploaded, never signed (the build refuses to run with any signing variable set) |
+
+Both are built from the same commit. They differ in two packed files: `src/test-mode.js` and
+`src/build-flavour.js` (`{ flavour: 'release' }` or `'smoke'`; the committed file says `'dev'` for unpackaged
+runs and unit tests). The swap is done in electron-builder's file list, before `app.asar` is written, and
+`tools/after-pack.js` re-reads both files from the packed asar and fails the build if they are not the
+selected flavour's. It is deliberately **not** done by rewriting `app.asar` in `afterPack`: electron-builder
+computes the asar integrity hash (the `EnableEmbeddedAsarIntegrityValidation` fuse) before `afterPack` runs
+(`app-builder-lib/out/platformPackager.js`), so a rewritten asar would no longer match it on Windows.
+
+What "no test mode" means precisely: the test-mode module (marker logic, test-only switch names, test variables)
+is **removed** from a release build: the stub replaces it. The test-only branches in `main.js` (hidden window,
+event log, trace, sandbox report) and the `BENTO_TRANSPORT=http` harness still ship, but are **provably dead**:
+they run only when `testModeOn(...)` is true or when the `BENTO_*` overrides are read, and both are false for the
+release flavour constant, which the gate asserts byte for byte.
+
+In the release flavour, test mode is off by two independent facts: the stub (no marker is ever read, no
+switch is test-only, no variable is honoured), and `testModeOn` in `src/argv-policy.js`, which `main.js` also
+uses, allows test mode only for the flavours `dev` and `smoke`. The second matters because Electron derives
+`app.isPackaged` from the executable's file name: a copy of the release binary named `electron` reports
+`isPackaged === false`, which used to mean "unpackaged, the env alone enables test mode". **Measured** on the
+smoke AppImage (2026-10-29): started as `electron` with `BENTO_TEST_HEADLESS=1` and **no** marker it opened the
+debug port (`DevTools listening on ws://127.0.0.1:...`). The release flavour also ignores `BENTO_DIST` /
+`BENTO_TRANSPORT` whatever `isPackaged` says.
+
+`test/packaged-smoke.js` now takes both AppImages (`node test/packaged-smoke.js <smoke.AppImage> <release.AppImage>`).
+Release part: in a disposable extracted copy with `BENTO_TEST_HEADLESS=1` **and** a valid marker planted next to
+the resources, the binary refuses `--remote-debugging-port=0` / `--user-data-dir` / `--ozone-platform=headless`
+(exit 2, the "unsafe switch" message, no `DevTools listening` line), and so does a hard link of it named
+`electron`. Smoke part: the checks described below, on the smoke AppImage.
+
+### Packaged test mode (smoke flavour only: marker file)
+
+A packaged SMOKE build honours test mode only if **both** the environment variable is `1`
 **and** `<process.resourcesPath>/.bento-test-mode` passes `hasTestMarker` (`src/test-mode.js`): the
 resources path is its own real path (no symlinked directory), the marker opens with `O_NOFOLLOW` (a
 symlink fails), `fstat` on that descriptor says regular file, exactly one hard link, owned by the current
 user, not group/world-writable, exactly 19 bytes, and the content is exactly `bento-test-mode-v1\n`.
-Anything else, including any error, means "not test mode". **Issue #13:** this marker gate is a tripwire, not a boundary, and the test-mode code ships in every build; it must be compiled out of release builds before ANY signed release. Unit tests cover each check alone (a fake `fs`
+Anything else, including any error, means "not test mode". One exception, accepted only because the smoke build
+is never distributed: a smoke binary started under the name `electron` counts as unpackaged and enters test mode on
+the environment alone (measured above). Unit tests cover each check alone (a fake `fs`
 isolates `isFile`, `nlink`, owner, mode and size, which real files cannot) and were mutation-checked.
 `size` and `isFile` are not equivalent mutants once the fake `fs` is used; against a real filesystem the
 content comparison and the file type already reject what they would reject.
 
-`test/packaged-smoke.js` copies the AppImage into its own temp directory (the release artifact is never
+`test/packaged-smoke.js` copies the smoke AppImage into its own temp directory (the artifact is never
 modified, not even chmod), extracts the copy, creates the marker **in that extraction only**, runs the
 extracted binary directly with the env, and removes the directory in a `finally` (also when extraction
 fails). The app it launches gets `HOME` and `XDG_CONFIG_HOME/CACHE_HOME/DATA_HOME/RUNTIME_DIR` inside that
@@ -189,19 +228,37 @@ but started through the extracted `AppRun`, the launcher scrubs the env and the 
 is required. Refusal-check children start as process-group leaders and the whole group is killed on
 timeout and in `finally`.
 
-What the release gate (`packaging/verify-artifact.sh`) now proves about the marker, from the packaged
-`app.asar` itself: no `.bento-test-mode` anywhere in the artifact; `test-mode.js` still spells out every
-control above (text check); the packaged `test-mode.js` and `argv-policy.js` are **run** by
-`desktop/tools/check-asar-policy.js` (valid marker accepted; hard link, foreign owner, group/world-writable,
-symlink, directory, symlinked resources path, wrong or near-miss token all refused; a packaged build with
-the env but no marker, or with a truthy non-`true` marker, still refuses `--remote-debugging-port`); and
-`main.js` passes `app.isPackaged && hasTestMarker(process.resourcesPath)` to the policy.
-`packaging/test-verify-artifact.sh` mutates each of these (marker function returns true, each check removed,
-argv-policy condition dropped or loosened, `main.js` passing a constant) and requires the gate to fail
-**with the expected message**, so a case cannot pass for the wrong reason.
+### What the gate proves about the flavour and the marker
+
+`packaging/verify-artifact.sh [--flavour release|smoke]` (default `release`; `--release` with `--flavour smoke`
+fails: a smoke artifact is never a release), from the packaged `app.asar` itself, via
+`desktop/tools/check-asar-policy.js --flavour <f>`:
+
+- both flavours: `src/build-flavour.js` is byte for byte the requested flavour's file; `argv-policy.js` keeps
+  its flavour rule (`TEST_FLAVOURS`); no `.bento-test-mode` anywhere in the artifact; `main.js` gates test-only
+  behaviour on `testModeOn` and passes `app.isPackaged && hasTestMarker(process.resourcesPath)` to the policy.
+- **release**: `src/test-mode.js` is byte for byte the stub; no code token under `src/` (strings, template
+  literals and identifiers; comments do not count, so `argv-policy.js` may still explain its refusal) contains
+  `remote-debugging`, `ozone-platform=headless`, `user-data-dir`, `bento-test-mode`, `BENTO_TEST_HEADLESS`,
+  `BENTO_TEST_TRACE_DIR` or `hasTestMarkerWin32`; the packaged modules are **run**: a valid marker file is not
+  accepted, and with the env every test switch is refused for every combination of `packaged` and marker.
+- **smoke**: `src/test-mode.js` is not the stub (a smoke build without test mode tests nothing); every marker
+  control is spelled out (text check) and the packaged `test-mode.js` / `argv-policy.js` are **run** (valid
+  marker accepted; hard link, foreign owner, group/world-writable, symlink, directory, symlinked resources path,
+  wrong or near-miss token all refused; a packaged build with the env but no marker, or with a truthy
+  non-`true` marker, still refuses `--remote-debugging-port`).
+
+`packaging/test-verify-artifact.sh` (needs both the release and the smoke AppImage) mutates each of these and
+requires the gate to fail **with the expected message**: on the release tree the real `test-mode.js` packed
+instead of the stub, the flavour constant flipped to `smoke` or the flavour file edited, a stub that returns
+true or accepts switches, the argv flavour rule dropped or widened, a debug-port literal in `main.js`; on the
+smoke tree the marker-logic mutations and the stub packed into a smoke build; plus a release artifact gated as
+smoke, a smoke artifact gated as release, and a smoke artifact with `--release`. The fast Linux-only
+`packaging/test-asar-policy-mutations.sh` runs the same shared list (`packaging/asar-policy-mutations.sh`)
+against `check-asar-policy.js` alone.
 
 `process.env` reads are found by parsing the packaged sources (comments never count), not by grep. They must
-be exactly four known lines in `main.js`; a read appended to one of them, `process["env"]`, or
+be exactly five known lines in `main.js`; a read appended to one of them, `process["env"]`, or
 `const { env } = process` (or via `globalThis`/`global`) is a different line or shape and fails. The gate still
 never starts the artifact; the one thing it loads is the packaged `test-mode.js` / `argv-policy.js` (pure `node:fs`/`node:path`)
 into a throwaway node process. This replaced a grep that flagged the
@@ -210,26 +267,29 @@ word in a comment in `argv-policy.js` and failed the Verify-artifacts job on `ma
 the exact-line match fixes. Mutation cases: a line or block comment mentioning `process.env` is accepted; a
 real read appended to an exempt-looking line is refused.
 
-Honest limits: this is a tripwire plus a gate, not a boundary. Chromium parses the debug-port switch
-before any JavaScript runs, so a marker-less packaged build started with the switch still opens the
-port until `main.js` exits 2 moments later; the marker only decides whether our own argv policy lets it
-continue. Anyone who can write into the install tree (root) can already do anything. The gate proves the
-shipped logic behaves as designed and that the marker is absent; it cannot prove what a user's machine
-holds after install. **Follow-up**: drive the packaged build over `--remote-debugging-pipe` (no TCP port,
-no marker, no env switch) from a parent process that owns the pipe.
+### What is still true (limits)
 
-Per package type, what stands between a local attacker and test mode:
+- Chromium parses `--remote-debugging-port` before any JavaScript runs. A RELEASE app started with that switch
+  therefore may open the port for the moments until `main.js` exits 2. **Measured:** in the release checks above
+  no `DevTools listening` line appeared on stderr before the exit 2 (Linux, AppImage copy, Electron 45.1.0).
+  **Not measured:** whether a TCP listener exists for a few milliseconds without that line being printed; the
+  exit-2 refusal does not depend on it, and during that window there is no test mode, and the refusal
+  happens before any window or page is created.
+- The gate proves what the shipped artifact contains; it cannot prove what a user's machine holds after install.
+- **Follow-up**: drive the smoke build over `--remote-debugging-pipe` (no TCP port) from a parent process that
+  owns the pipe.
 
-| Artifact | Defence |
+Per package type, what stands between a local attacker and test mode in a RELEASE build: nothing is needed,
+because the release flavour contains no test mode; the marker and launcher checks below are defence in depth
+and stay in the gate.
+
+| Artifact | Additional defences |
 |---|---|
-| AppImage, Flatpak | the launcher unsets `BENTO_TEST_HEADLESS` (gate: `check_unset` on `AppRun` / the Flatpak launcher), plus the marker |
-| deb, rpm | **only the marker**: the launcher starts the binary directly with no env scrub. The install tree is root-owned, so an unprivileged user cannot create the marker; the gate asserts every package entry is `root:root` and nothing is group/world-writable or setuid (it can check the root ownership only on a real `.deb`/`.rpm`, not on an extracted `--tree`). A user who is root can already do anything. |
+| AppImage, Flatpak | the launcher unsets `BENTO_TEST_HEADLESS` (gate: `check_unset` on `AppRun` / the Flatpak launcher) |
+| deb, rpm | the install tree is root-owned (the gate asserts every package entry is `root:root` and nothing is group/world-writable or setuid; it can check the root ownership only on a real `.deb`/`.rpm`, not on an extracted `--tree`) |
 
-Windows: `hasTestMarker` needs POSIX owner and mode semantics, so on `win32` it **fails closed**: packaged
-test mode is unavailable there, and no Windows packaged smoke test exists. A Windows-specific validation
-(refuse reparse points, check the token, require the file to live under the install directory and to be
-writable only by Administrators/SYSTEM) is the next step before any Windows packaged test mode; none of it
-is implemented or verified.
+Windows: see `docs/desktop-windows.md` (same flavours; the release installer/portable carry the stub, the
+smoke installer is built in the same CI job for the test-mode checks).
 
 Electron itself adds `--allow-file-access-from-files` to the argv it reports for a second instance
 (found by the packaged smoke test; measured on Electron 45.1.0; the first launch's `process.argv` does
@@ -386,7 +446,7 @@ controls). Not needed on a normal desktop.
 ## Gate integrity
 
 `packaging/test-verify-artifact.sh` extracts a deb, rpm, AppImage and the Flatpak build tree, then
-for each of ~170 mutations makes a copy, breaks one thing and asserts that `verify-artifact.sh`
+for each mutation case makes a copy, breaks one thing and asserts that `verify-artifact.sh`
 fails (after a positive control that the unmodified trees pass): missing/empty licence files, NOTICE
 or SOURCE.txt; wrong SOURCE.txt commit, dirty flag, repository URL, tag line; a flipped fuse;
 `--no-sandbox` in AppRun or a desktop Exec; 0777/0666/group-writable files and directories; setuid

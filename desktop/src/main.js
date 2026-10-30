@@ -20,7 +20,8 @@ const brand = require('../brand.json');
 const { aboutDetail, buildMenuTemplate, SOURCE_URL } = require('./menu');
 const { startShell } = require('./shell/shell-app');
 const { buildShellMenuTemplate } = require('./shell/shell-menu');
-const { testHeadless, testTraceDir, unsafeSwitches } = require('./argv-policy');
+const { testModeOn, testTraceDir, unsafeSwitches } = require('./argv-policy');
+const { flavour } = require('./build-flavour');
 const { pdfPathsFromArgv } = require('./open-file');
 const { hasTestMarker } = require('./test-mode');
 const { createLimitedLogger, sanitizeText } = require('./shell/bounded');
@@ -30,9 +31,10 @@ const { DEFAULT_TRANSPORT, startKindFor } = require('./start-mode');
 // scheme. BENTO_TRANSPORT=http is a TEST-ONLY harness (the single-window M2 app on
 // loopback, unpackaged runs only): it is not the product and has no tabs (start-mode.js).
 
-// Dev overrides only: a packaged app must not be redirected by its environment.
+// Dev overrides only: a packaged app must not be redirected by its environment. A release build never reads them,
+// even when app.isPackaged is false (Electron derives it from the executable's name; issue #13).
 // Packaged, the bundle is an extraResource outside app.asar (docs/desktop-linux.md).
-const overrides = app.isPackaged ? {} : process.env;
+const overrides = app.isPackaged || flavour === 'release' ? {} : process.env;
 const distDir =
   overrides.BENTO_DIST ||
   (app.isPackaged ? path.join(process.resourcesPath, 'dist') : path.resolve(__dirname, '..', '..', 'dist'));
@@ -57,12 +59,12 @@ const showAbout = () =>
   }).then(({ response }) => (response === 1 ? shell.openExternal(SOURCE_URL) : undefined));
 const openSource = () => shell.openExternal(SOURCE_URL);
 
-// Test mode in a packaged build needs the environment AND the marker file (src/test-mode.js). Every
-// test-only behaviour below (hidden window, event log, trace, sandbox report) keys off `testMode`,
-// never off the environment alone.
+// Test mode never exists in the release flavour (testModeOn, src/build-flavour.js; there src/test-mode.js is a stub).
+// In a packaged smoke build it needs the environment AND the marker file (src/test-mode.js). Every test-only
+// behaviour below (hidden window, event log, trace, sandbox report) keys off `testMode`, never off the environment alone.
 const policyOptions = { packaged: app.isPackaged, testMarker: app.isPackaged && hasTestMarker(process.resourcesPath) };
 // The environment is handed on only in test mode: one guarded read (tools/check-asar-policy.js lists it).
-const testEnv = testHeadless(process.env) && (!policyOptions.packaged || policyOptions.testMarker === true) ? process.env : null;
+const testEnv = testModeOn(process.env, policyOptions) ? process.env : null;
 const testMode = testEnv !== null;
 
 // Test mode only: OS-level sandbox state of every Chromium process (Electron's
@@ -110,7 +112,7 @@ trace(`start pid=${process.pid} ppid=${process.ppid} exec=${process.execPath} ar
 process.on('exit', (code) => trace(`process exit code=${code}`));
 
 function installMenu() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ showAbout, openSource, devtools: !app.isPackaged })));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({ showAbout, openSource, devtools: !app.isPackaged && flavour !== 'release' })));
 }
 
 /** Rebuilt when the recent-files list changes (Open Recent submenu). */
@@ -119,7 +121,7 @@ function installShellMenu(menuActions, recents) {
   const key = JSON.stringify(recents);
   if (key === menuRecents) return;
   menuRecents = key;
-  const template = buildShellMenuTemplate({ ...menuActions, showAbout, openSource }, { recents, devtools: !app.isPackaged });
+  const template = buildShellMenuTemplate({ ...menuActions, showAbout, openSource }, { recents, devtools: !app.isPackaged && flavour !== 'release' });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 

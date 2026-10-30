@@ -21,11 +21,14 @@ const ALWAYS_ALLOWED = new Set([
   `${DASHES}ozone-platform-hint=wayland`,
   `${DASHES}ozone-platform-hint=x11`,
 ]);
-// The test harness drives the real artifact headless over the debug port. These pass only when
-// BENTO_TEST_HEADLESS=1 is in the environment AND, for a packaged build, the test-mode marker file
-// is present (src/test-mode.js). The default env here is empty, so it fails closed.
-const TEST_EXACT = new Set([`${DASHES}ozone-platform=headless`, `${DASHES}remote-debugging-pipe`]);
-const TEST_PREFIX = [`${DASHES}remote-debugging-port=`, `${DASHES}user-data-dir=`];
+// Test-only switches live in src/test-mode.js, which the RELEASE flavour replaces with a stub that has none
+// (issue #13): a release build refuses them like any other switch. Test mode is never on in the release flavour,
+// whatever app.isPackaged says (Electron derives isPackaged from the executable's name, so a copy of a release
+// executable renamed to `electron` would otherwise count as unpackaged). In the dev and smoke flavours it needs
+// BENTO_TEST_HEADLESS=1 and, for a packaged build, the marker file. The default env here is empty: fails closed.
+const { flavour: BUILD_FLAVOUR } = require('./build-flavour');
+const { isTestSwitch, testHeadless, testTraceDir } = require('./test-mode');
+const TEST_FLAVOURS = new Set(['dev', 'smoke']);
 
 // Electron itself adds this switch to the argv it reports for a *second* instance (measured on
 // Electron 45.1.0; the first launch's process.argv does not have it). It has no effect there: the
@@ -35,30 +38,29 @@ const SECOND_INSTANCE_INJECTED = new Set([`${DASHES}allow-file-access-from-files
 const looksLikeSwitch = (arg, platform) =>
   typeof arg === 'string' && (arg.startsWith('-') || (platform === 'win32' && arg.startsWith('/')));
 
-/** Test mode (headless CI smoke): the window is never shown and test-only switches pass. */
-const testHeadless = (env = {}) => env.BENTO_TEST_HEADLESS === '1';
-
-/** Test mode only: directory for per-process trace files (BENTO_TEST_TRACE_DIR), or undefined. */
-const testTraceDir = (env = {}) => (testHeadless(env) ? env.BENTO_TEST_TRACE_DIR : undefined);
+/** Test mode: a test flavour (never release), the environment, and for a packaged build the marker file too. */
+function testModeOn(env = {}, { packaged = false, testMarker = false, flavour = BUILD_FLAVOUR } = {}) {
+  return TEST_FLAVOURS.has(flavour) && testHeadless(env) && (!packaged || testMarker === true);
+}
 
 function allowed(arg, testMode, secondInstance) {
   if (ALWAYS_ALLOWED.has(arg)) return true;
   if (secondInstance && SECOND_INSTANCE_INJECTED.has(arg)) return true;
   if (!testMode) return false;
-  return TEST_EXACT.has(arg) || TEST_PREFIX.some((p) => arg.startsWith(p) && arg.length > p.length);
+  return isTestSwitch(arg);
 }
 
 /**
  * Returns the arguments of `argv` (after the executable) that this application
  * refuses, i.e. every switch not on the allowlist (empty array = fine).
  */
-function unsafeSwitches(argv, env = {}, { secondInstance = false, packaged = false, testMarker = false, platform = process.platform } = {}) {
+function unsafeSwitches(argv, env = {}, { secondInstance = false, packaged = false, testMarker = false, flavour = BUILD_FLAVOUR, platform = process.platform } = {}) {
   const list = Array.isArray(argv) ? argv.slice(1) : [];
   const end = list.indexOf('--');
   const options = end === -1 ? list : list.slice(0, end);
   // A packaged build honours the test switch only with the marker file (testMarker), never on the environment alone.
-  const testMode = testHeadless(env) && (!packaged || testMarker === true);
+  const testMode = testModeOn(env, { packaged, testMarker, flavour });
   return options.filter((arg) => looksLikeSwitch(arg, platform) && !allowed(arg, testMode, secondInstance));
 }
 
-module.exports = { unsafeSwitches, looksLikeSwitch, testHeadless, testTraceDir };
+module.exports = { unsafeSwitches, looksLikeSwitch, testModeOn, testHeadless, testTraceDir };

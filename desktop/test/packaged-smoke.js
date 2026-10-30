@@ -1,8 +1,12 @@
 'use strict';
 
-// Headless smoke test of a PACKAGED AppImage. Usage:
-//   node test/packaged-smoke.js <file.AppImage>
-// A packaged build honours test mode (the debug port, headless platform) only when BENTO_TEST_HEADLESS=1
+// Headless smoke test of PACKAGED AppImages, both build flavours (issue #13). Usage:
+//   node test/packaged-smoke.js <SMOKE-flavour file.AppImage> <RELEASE-flavour file.AppImage>
+// (build them with `BENTO_FLAVOUR=smoke npm run dist:linux` and `npm run dist:linux`).
+// RELEASE: test mode does not exist. In a disposable extracted copy, with BENTO_TEST_HEADLESS=1 AND a valid marker
+// planted, the binary must still refuse the debug-port switch (exit 2, no debug port), also when started under the
+// name `electron` (which makes app.isPackaged false).
+// SMOKE: honours test mode (the debug port, headless platform) only when BENTO_TEST_HEADLESS=1
 // AND the file resources/.bento-test-mode exist (src/test-mode.js). So this runner extracts the AppImage
 // into a disposable temp directory (--appimage-extract), creates the marker in that COPY only, and
 // runs the extracted binary directly with the env (AppRun scrubs BENTO_* for normal launches; a
@@ -21,9 +25,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const target = process.argv[2];
-if (!target || !target.endsWith('.AppImage')) {
-  process.stderr.write('usage: packaged-smoke.js <file.AppImage>\n');
+const [target, releaseTarget] = process.argv.slice(2);
+const SMOKE_TAG = 'SMOKE-ONLY-NOT-FOR-DISTRIBUTION'; // tools/flavour.js nameTag
+const isAppImage = (f) => typeof f === 'string' && f.endsWith('.AppImage');
+if (!isAppImage(target) || !isAppImage(releaseTarget) || !path.basename(target).includes(SMOKE_TAG) || path.basename(releaseTarget).includes(SMOKE_TAG)) {
+  process.stderr.write('usage: packaged-smoke.js <SMOKE-ONLY-NOT-FOR-DISTRIBUTION...AppImage> <release .AppImage>\n');
   process.exit(2);
 }
 const { executableName } = require('../brand.json');
@@ -62,13 +68,16 @@ async function until(fn, ms, what) {
 // SMOKE_EXTRA_ARGS exists only for negative controls (e.g. --no-sandbox must make this test fail).
 const extra = (process.env.SMOKE_EXTRA_ARGS || '').split(' ').filter(Boolean);
 const appArgs = ['--ozone-platform=headless', '--remote-debugging-port=0', `--user-data-dir=${profile}`, ...extra];
-const extractCopy = () => {
-  const copy = path.join(work, 'artifact.AppImage'); // never chmod or otherwise touch the release artifact itself
-  fs.copyFileSync(target, copy);
+const extractCopy = (artifact, dir) => {
+  fs.mkdirSync(dir, { recursive: true });
+  const copy = path.join(dir, 'artifact.AppImage'); // never chmod or otherwise touch the artifact itself
+  fs.copyFileSync(artifact, copy);
   fs.chmodSync(copy, 0o755);
-  const r = spawnSync(copy, ['--appimage-extract'], { cwd: work, stdio: 'ignore', timeout: 180000, killSignal: 'SIGKILL' });
-  if (r.status !== 0 || !fs.existsSync(binary)) throw new Error(`could not extract the AppImage (status=${r.status} signal=${r.signal})`);
+  const r = spawnSync(copy, ['--appimage-extract'], { cwd: dir, stdio: 'ignore', timeout: 180000, killSignal: 'SIGKILL' });
+  const root = path.join(dir, 'squashfs-root');
+  if (r.status !== 0 || !fs.existsSync(path.join(root, executableName))) throw new Error(`could not extract ${path.basename(artifact)} (status=${r.status} signal=${r.signal})`);
   fs.unlinkSync(copy);
+  return root;
 };
 const writeMarker = () => fs.writeFileSync(marker, MARKER_CONTENT, { mode: 0o644 });
 // `exe` is the extracted binary (needs the marker) or the extracted AppRun (scrubs the env).
@@ -94,6 +103,24 @@ const exitOf = (run) => until(() => run.child.exitCode !== null && { code: run.c
   killGroup(run, 'SIGKILL'); // a hung refusal check must not leave a process tree behind
   return { code: 'timeout' };
 });
+
+// RELEASE flavour: env + a valid marker in the copy, started directly and as `electron`: test mode must stay off.
+async function releaseChecks() {
+  const root = extractCopy(releaseTarget, path.join(work, 'release'));
+  fs.writeFileSync(path.join(root, 'resources', MARKER_NAME), MARKER_CONTENT, { mode: 0o644 });
+  const refusedRun = async (exe) => {
+    const run = launch([], { exe });
+    const { code } = await exitOf(run);
+    return { ok: code === 2 && /unsafe switch/.test(run.stderr) && !/DevTools listening/.test(run.stderr), detail: `exit=${code}` };
+  };
+  const direct = await refusedRun(path.join(root, executableName));
+  check('RELEASE copy WITH env AND a valid marker still refuses the test switches (exit 2, unsafe-switch message, no debug port)', direct.ok, direct.detail);
+  // Electron derives app.isPackaged from the executable's name: a hard link named `electron` makes it false.
+  const renamed = path.join(root, 'electron');
+  fs.linkSync(path.join(root, executableName), renamed);
+  const asElectron = await refusedRun(renamed);
+  check('RELEASE copy started as `electron` (app.isPackaged false) WITH env AND marker still refuses (exit 2, no debug port)', asElectron.ok, asElectron.detail);
+}
 
 // Negative controls: without the marker the binary refuses the debug port; and AppRun scrubs the env even with the marker.
 async function refusalChecks() {
@@ -167,7 +194,8 @@ async function secondInstance(shellCdp) {
 
 async function main() {
   try {
-    extractCopy();
+    await releaseChecks();
+    extractCopy(target, work);
     await refusalChecks();
     const first = launch(process.env.SMOKE_NO_PDF ? [] : [pdfA]);
     const port = await until(() => (first.stderr.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/) || [])[1], 90000, 'DevTools port');

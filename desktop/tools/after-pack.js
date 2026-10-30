@@ -6,9 +6,11 @@
 // there is one) covers the flipped binary.
 const fs = require('node:fs');
 const path = require('node:path');
+const { extractFile } = require('@electron/asar');
 const { flipFuses } = require('@electron/fuses');
 const { EXPECTED_FUSES, FuseVersion } = require('./fuse-config');
 const { normaliseModes } = require('./normalise-modes');
+const { FLAVOUR_DIR, flavourOf } = require('./flavour');
 
 /** Name of the main executable inside the unpacked app directory. */
 function executableOf(context) {
@@ -17,7 +19,20 @@ function executableOf(context) {
     : context.packager.executableName;
 }
 
+/** Fails the build when the packed flavour files are not the ones BENTO_FLAVOUR selects (tools/flavour.js). */
+function assertFlavour(appOutDir) {
+  const flavour = flavourOf();
+  const asar = path.join(appOutDir, 'resources', 'app.asar');
+  const packed = (name) => extractFile(asar, `src/${name}`).toString('utf8');
+  const own = (name) => fs.readFileSync(path.join(FLAVOUR_DIR, flavour, name), 'utf8');
+  if (packed('build-flavour.js') !== own('build-flavour.js')) throw new Error(`afterPack: packed src/build-flavour.js is not the ${flavour} one`);
+  const stub = fs.readFileSync(path.join(FLAVOUR_DIR, 'release', 'test-mode.js'), 'utf8');
+  if ((packed('test-mode.js') === stub) !== (flavour === 'release')) throw new Error(`afterPack: packed src/test-mode.js does not match the ${flavour} flavour`);
+  return flavour;
+}
+
 module.exports = async function afterPack(context) {
+  process.stderr.write(`[flavour] ${assertFlavour(context.appOutDir)} (app.asar checked)\n`);
   const exe = path.join(context.appOutDir, executableOf(context));
   if (!fs.existsSync(exe)) throw new Error(`afterPack: ${exe} does not exist`);
   await flipFuses(exe, { version: FuseVersion.V1, ...EXPECTED_FUSES });
