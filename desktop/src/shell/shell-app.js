@@ -21,6 +21,7 @@ const { isPermanentOpenFailure } = require('./recents');
 const { registerShellIpc } = require('./shell-ipc');
 const { SHELL_CHANNELS } = require('./shell-channels');
 const { adapterFor, handoffScript, isTargetPage } = require('./handoff');
+const { createHandoff } = require('./handoff-runner');
 
 const APP_ORIGIN = 'bento://app';
 const SHELL_PARTITION = 'bento-shell'; // in-memory, like every tab partition
@@ -125,44 +126,13 @@ async function startShell(options) {
    * Runs in the background (the tab manager does not await it): progress and
    * failure go to the tab's status, never to the caller of activate/openTool.
    */
-  async function handoff(tab, view) {
-    const seq = (handoffSeq.get(tab.id) || 0) + 1;
-    handoffSeq.set(tab.id, seq);
-    const doc = tab.docId && tab.toolId ? store.get(tab.docId) : undefined;
-    if (!doc) {
-      if (statuses.has(tab.id)) setStatus(tab.id, null);
-      return;
-    }
-    const wc = view.webContents;
-    // Superseded when a newer handoff started, the view was replaced, or the tab navigated (epoch).
-    const latest = () => handoffSeq.get(tab.id) === seq && tabs.viewOf(tab.id) === view && !wc.isDestroyed() && tabs.get(tab.id)?.epoch === tab.epoch;
-    // A handoff dropped before it finished must not leave its own 'Loading...' behind (hash-only navigation fires no
-    // did-navigate that would clear it). A newer handoff owns the status once handoffSeq has moved on.
-    const abandon = () => {
-      if (handoffSeq.get(tab.id) === seq && tabs.has(tab.id) && statuses.get(tab.id)?.kind === 'loading') setStatus(tab.id, null);
-    };
-    const toolName = registry.get(tab.toolId).name;
-    setStatus(tab.id, { kind: 'loading', text: `Loading ${doc.name} into ${toolName}...` });
-    try {
-      const entry = doc.bytes
-        ? toolIpc.grantBytes(wc, doc.name, doc.bytes)
-        : await toolIpc.grantPath(wc, doc.filePath, { dev: doc.dev, ino: doc.ino });
-      await beforeInject({ tabId: tab.id, toolId: tab.toolId });
-      // Re-check right before injecting: the grant (or the settle delay) may have outlived the page.
-      if (!latest() || !isTargetPage(wc.getURL(), APP_ORIGIN, tab.page)) return abandon();
-      // userGesture=false: the page must not get transient user activation from us.
-      const count = await wc.executeJavaScript(handoffScript([entry], adapterFor(tab.toolId)), false);
-      if (!latest()) return abandon();
-      if (store.has(doc.id)) store.touch(doc.id);
-      pushCapped(handoffs, Object.freeze({ tabId: tab.id, toolId: tab.toolId, docId: doc.id, count }));
-      setStatus(tab.id, null);
-    } catch (err) {
-      const reason = sanitizeText(err && err.message); // page-originated text: capped, no control characters
-      logLimited(tab.partition, `handoff ${sanitizeText(doc.name)} -> ${tab.toolId} (tab ${tab.id}): ${reason}`);
-      if (latest()) setStatus(tab.id, { kind: 'error', text: sanitizeText(`Could not open ${doc.name} in ${toolName}: ${reason}`) });
-      else abandon();
-    }
-  }
+  const handoff = createHandoff({
+    tabs: { get: (id) => tabs.get(id), has: (id) => tabs.has(id), viewOf: (id) => tabs.viewOf(id) }, // `tabs` is assigned below
+    store, registry, toolIpc, origin: APP_ORIGIN, handoffSeq, handoffs, beforeInject, logLimited,
+    getStatus: (id) => statuses.get(id),
+    setStatus,
+    adapterFor, handoffScript, isTargetPage, pushCapped, sanitizeText,
+  });
 
   const state = () => ({
     activeTabId: tabs.activeId(),
