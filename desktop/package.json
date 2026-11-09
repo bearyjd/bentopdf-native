@@ -20,7 +20,7 @@
     "@eslint/js": "10.0.1",
     "electron": "45.1.0",
     "electron-builder": "26.18.0",
-    "eslint": "10.1.0",
+    "eslint": "10.14.0",
     "globals": "17.4.0"
   },
   "homepage": "https://github.com/bearyjd/bentopdf-native",
