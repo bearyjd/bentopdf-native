@@ -3,7 +3,8 @@
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
 // One list drives both the afterPack hook and the check script, so they cannot drift.
-// Fuses not listed (LoadBrowserProcessSpecificV8Snapshot, WasmTrapHandlers) keep Electron's default.
+// Every fuse is pinned, including the two that only restate Electron's default (V8 snapshot off, wasm trap handlers
+// on), so the gate fails on any drift in any index.
 const EXPECTED_FUSES = Object.freeze({
   [FuseV1Options.RunAsNode]: false,
   [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
@@ -12,7 +13,9 @@ const EXPECTED_FUSES = Object.freeze({
   [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
   [FuseV1Options.OnlyLoadAppFromAsar]: true,
   [FuseV1Options.EnableCookieEncryption]: true,
+  [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
   [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
+  [FuseV1Options.WasmTrapHandlers]: true,
 });
 
 module.exports = { EXPECTED_FUSES, FuseVersion };

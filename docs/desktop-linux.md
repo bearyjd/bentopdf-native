@@ -341,7 +341,7 @@ gate; `smoke --no-sandbox` is a negative control that fails).
 |---|---|---|
 | AppImage | Chromium's user-namespace sandbox. A squashfs mount is `nosuid` and not root-owned, so the setuid helper cannot work in an AppImage. | smoke test, host Fedora 44 / kernel 7.2: renderer `Seccomp: 2`, `NoNewPrivs: 1`, `CapEff: 0`, own user namespace |
 | Flatpak | Electron2.BaseApp's zypak runs Chromium's sub-sandbox through the Flatpak portal | smoke test of the installed Flatpak (run with a test-only `--share=network` and `--filesystem=<tmp>`): renderer `Seccomp: 2`, `NoNewPrivs: 1`, `CapEff: 0` |
-| deb / rpm | The payload ships `chrome-sandbox` as `root:root 0755` (not setuid; `verify-artifact.sh` fails on any setuid or group/world-writable payload entry), so no setuid helper exists between unpack and the post-install script. `packaging/linux/after-install.sh` then decides, fail-closed: user namespaces forbidden by sysctl, or the non-root probe (`setpriv --reuid=65534 ... unshare --user true`; as root `unshare` always succeeds) fails or a tool is missing: `chmod 4755` the helper. Only AppArmor restricts them (`apparmor_restrict_unprivileged_userns=1`, Ubuntu 23.10+): install the app-specific AppArmor profile (which grants `userns` to this binary) and keep 0755, falling back to setuid if the profile cannot load. Otherwise keep 0755. | The script logic is read from the built deb and rpm by the gate; the install paths themselves are NOT VERIFIED (installing needs root/layering here). Before this change every file in the payload was 0777/0666 (a root-run installer then made a world-writable binary's neighbour setuid): see "Payload file modes". |
+| deb / rpm | The payload ships `chrome-sandbox` as `root:root 0755` (not setuid; `verify-artifact.sh` fails on any setuid or group/world-writable payload entry), so no setuid helper exists between unpack and the post-install script. `packaging/linux/after-install.sh` then decides, fail-closed: user namespaces forbidden by sysctl, or the non-root probe (`setpriv --reuid=65534 ... unshare --user true`; as root `unshare` always succeeds) fails or a tool is missing: `chmod 4755` the helper. Only AppArmor restricts them (`apparmor_restrict_unprivileged_userns=1`, Ubuntu 23.10+): install the app-specific AppArmor profile (which grants `userns` to this binary) and keep 0755, falling back to setuid if the profile cannot load or the non-root probe still fails after it loaded (re-probe). Otherwise keep 0755. | The script logic is read from the built deb and rpm by the gate; the install paths themselves are NOT VERIFIED (installing needs root/layering here). Before this change every file in the payload was 0777/0666 (a root-run installer then made a world-writable binary's neighbour setuid): see "Payload file modes". |
 
 **Where it cannot sandbox (AppImage):** hosts that forbid unprivileged user
 namespaces (Ubuntu 23.10+/24.04 with `kernel.apparmor_restrict_unprivileged_userns=1`,
@@ -528,3 +528,20 @@ Nothing was installed system-wide and nothing was layered. Side effects of build
 - One 512 px PNG icon (plus its SVG source); no symbolic icon.
 - CI workflow `.github/workflows/desktop-linux.yml` is NOT VERIFIED (never run on GitHub); only YAML parsing and shellcheck were run locally. It does not build or gate the Flatpak.
 - 100+ MB PDF and multi-page OCR memory report (also an M4 deliverable) is not part of this change.
+
+## Gate hardening (issue #6)
+
+Added after an independent verifier mutated the gate (24 mutations, 20 caught):
+
+- **Symlinks**: `packaging/check-symlinks.sh` fails on any symlink in the extracted tree that resolves outside it
+  (absolute links always count as escaping). Run by `verify-artifact.sh` for every kind.
+- **Fuses**: all nine fuse indices are pinned in `desktop/tools/fuse-config.js`, including
+  `LoadBrowserProcessSpecificV8Snapshot` (off) and `WasmTrapHandlers` (on), and the gate wants at least 9 `ok` lines.
+- **postinst structure**: `packaging/check-postinst.sh` requires exactly one `chmod 4755`, directly under
+  `if [ "$use_setuid" = 1 ]`, after the 0755 reset and `use_setuid=0`; the post-AppArmor-profile re-probe; and no
+  mention of `ELECTRON_DISABLE_SANDBOX`, `CHROME_DEVEL_SANDBOX`, `ELECTRON_EXTRA_LAUNCH_ARGS`, `ELECTRON_ENABLE_LOGGING`,
+  `ELECTRON_RUN_AS_NODE` or `NODE_OPTIONS`.
+  `packaging/test-check-postinst.sh` mutation-tests both new checks without a built artifact and runs in CI.
+- **Not changed**: `ELECTRON_DISABLE_SANDBOX` in a deb/rpm direct launch is still not scrubbed (there is no launcher
+  wrapper); it is mitigated fail-closed by `src/main.js`, which exits 2 when it is set. Gating the `.flatpak` bundle
+  (rather than the build directory) needs `flatpak-builder`, which still fails in the agent sandbox.
