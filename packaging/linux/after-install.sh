@@ -10,7 +10,8 @@
 #   - Only AppArmor restricts them (Ubuntu 23.10+)            -> install the app-specific
 #     AppArmor profile (grants `userns` to this binary only); keep 0755 if it loaded.
 #   - Kernel/sysctl forbids them, the probe fails, a probe tool is missing, or the
-#     profile could not be loaded                              -> setuid root 4755 helper.
+#     profile could not be loaded, or the non-root probe still fails after loading it
+#                                                               -> setuid root 4755 helper.
 set -u
 
 APP='/opt/${sanitizedProductName}'
@@ -55,7 +56,9 @@ use_setuid=0
 if [ "$(sysctl_value kernel/unprivileged_userns_clone)" = 0 ] || [ "$(sysctl_value user/max_user_namespaces)" = 0 ]; then
     use_setuid=1
 elif [ "$(sysctl_value kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
-    install_apparmor_profile || use_setuid=1
+    # Re-probe after loading the profile: a profile that loaded but does not actually lift the restriction
+    # for an ordinary user must not leave the helper non-setuid.
+    install_apparmor_profile && userns_works_for_nobody || use_setuid=1
 elif ! userns_works_for_nobody; then
     use_setuid=1
 fi

@@ -17,7 +17,7 @@
 # Electron fuses; BENTO_* overrides gated on app.isPackaged; no sandbox-off or devtools
 # flags; argv policy and About/source offer present; desktop entries; launchers unset
 # sandbox-off env; deb/rpm post-install policy; Flatpak permissions; file modes (nothing
-# group/world-writable, nothing setuid or setgid, chrome-sandbox exactly 0755 and absent
+# group/world-writable, nothing setuid or setgid, no symlink leaving the tree, chrome-sandbox exactly 0755 and absent
 # from the Flatpak). Names come from desktop/brand.json.
 # Packaged test mode: the packaged test-mode.js / argv-policy.js are RUN (desktop/tools/check-asar-policy.js), not just
 # grepped, and no .bento-test-mode may exist. deb/rpm launchers start the binary with no env scrub, so for them the
@@ -246,11 +246,8 @@ case "$KIND" in
   deb|rpm)
     if [ "$KIND" = deb ]; then POST="$SCRIPTS/postinst"; else POST="$SCRIPTS/rpm-scripts.txt"; fi
     [ -s "$POST" ] || fail "missing or empty maintainer script ${POST#"$WORK"/}"
-    grep -q 'setpriv --reuid=65534' "$POST" || fail "post-install does not probe user namespaces as an unprivileged user"
-    grep -q 'apparmor_restrict_unprivileged_userns' "$POST" || fail "post-install does not look at the AppArmor userns restriction"
-    grep -q 'chmod 4755' "$POST" || fail "post-install has no setuid fallback for the sandbox helper"
-    grep -q 'chmod 0755' "$POST" || fail "post-install does not reset the sandbox helper to 0755 first"
-    pass "post-install: non-root userns probe, AppArmor-aware, setuid helper only as fallback"
+    "$ROOT/packaging/check-postinst.sh" "$POST" >/dev/null || exit 1
+    pass "post-install: non-root userns probe, AppArmor-aware, re-probe after profile load, single guarded setuid fallback"
     # deb/rpm launchers start the binary directly, with NO env scrub. For these the only defence for the packaged
     # test mode is that the install tree is root-owned (a user cannot create the marker in it): see docs/desktop-linux.md.
     if [ -z "$TREE" ]; then
@@ -275,6 +272,10 @@ case "$KIND" in
     grep -Eq '^devices=.*all' "$FLATPAK_METADATA" && fail "flatpak metadata grants all devices"
     pass "flatpak: launcher unsets dangerous env; sockets=$sockets, no network, no filesystem" ;;
 esac
+
+# ---- symlinks ----------------------------------------------------------------------------
+NLINKS="$("$ROOT/packaging/check-symlinks.sh" "$OUT")" || exit 1
+pass "symlinks: $NLINKS in the artifact, none resolves outside the tree"
 
 # ---- file modes ---------------------------------------------------------------------
 WRITABLE="$(find "$PAYLOAD" ! -type l \( -perm -g+w -o -perm -o+w \) | wc -l)"
@@ -302,6 +303,6 @@ fi
 
 # ---- fuses ------------------------------------------------------------------------------
 node "$ROOT/desktop/tools/check-fuses.js" "$EXE" >"$WORK/fuses.txt" || { cat "$WORK/fuses.txt"; fail "fuse state mismatch"; }
-[ "$(grep -c '^ok' "$WORK/fuses.txt")" -ge 7 ] || fail "fewer than 7 fuses were checked"
+[ "$(grep -c '^ok' "$WORK/fuses.txt")" -ge 9 ] || fail "fewer than 9 fuses were checked"
 pass "Electron fuses: $(grep -c '^ok' "$WORK/fuses.txt") of $(wc -l < "$WORK/fuses.txt") as required"
 echo "VERIFIED: $ART ($KIND)"

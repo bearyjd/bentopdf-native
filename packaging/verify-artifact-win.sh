@@ -234,6 +234,6 @@ pass "no .pdb / signing keys / certificates / secrets / symlinks in the payload"
 
 # ---- fuses ------------------------------------------------------------------------------
 node "$(native "$ROOT/desktop/tools/check-fuses.js")" "$(native "$EXE")" >"$WORK/fuses.txt" || { cat "$WORK/fuses.txt"; fail "fuse state mismatch"; }
-[ "$(grep -c '^ok' "$WORK/fuses.txt")" -ge 7 ] || fail "fewer than 7 fuses were checked"
+[ "$(grep -c '^ok' "$WORK/fuses.txt")" -ge 9 ] || fail "fewer than 9 fuses were checked"
 pass "Electron fuses: $(grep -c '^ok' "$WORK/fuses.txt") of $(wc -l < "$WORK/fuses.txt") as required"
 echo "VERIFIED: $ART ($KIND)"

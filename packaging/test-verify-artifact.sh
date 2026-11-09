@@ -186,12 +186,18 @@ m_source_dirty() { sed -i 's/dirty=no/dirty=yes/' "$(resdir "$1")/SOURCE.txt"; }
 m_source_no_url() { sed -i 's#https://github.com/[A-Za-z0-9_./-]*#https://example.invalid/x#g' "$(resdir "$1")/SOURCE.txt"; }
 m_source_no_tagline() { sed -i '/release tag:/d' "$(resdir "$1")/SOURCE.txt"; }
 m_source_no_upstream() { sed -i "s/$(tr -d '[:space:]' < "$ROOT/UPSTREAM_COMMIT")/deadbeef/" "$(resdir "$1")/SOURCE.txt"; }
-m_flip_fuse() {
+flip_fuse() { # tree FuseV1Options-name state
   node -e "
     const { flipFuses, FuseVersion, FuseV1Options } = require(require.resolve('@electron/fuses', { paths: ['$ROOT/desktop'] }));
-    flipFuses(process.argv[1], { version: FuseVersion.V1, [FuseV1Options.RunAsNode]: true }).catch((e) => { console.error(e); process.exit(1); });
-  " "$(appdir "$1")/$EXE_NAME"
+    flipFuses(process.argv[1], { version: FuseVersion.V1, [FuseV1Options[process.argv[2]]]: process.argv[3] === 'on' }).catch((e) => { console.error(e); process.exit(1); });
+  " "$(appdir "$1")/$EXE_NAME" "$2" "$3"
 }
+m_flip_fuse() { flip_fuse "$1" RunAsNode on; }
+m_flip_fuse_v8snapshot() { flip_fuse "$1" LoadBrowserProcessSpecificV8Snapshot on; }
+m_flip_fuse_wasmtrap() { flip_fuse "$1" WasmTrapHandlers off; }
+m_symlink_abs() { ln -s /etc/passwd "$(resdir "$1")/evil"; }
+m_symlink_rel() { ln -s ../../../../../../../../../../etc/passwd "$(resdir "$1")/evil"; }
+m_symlink_dir() { ln -s /etc "$(appdir "$1")/locales-evil"; }
 m_apprun_no_sandbox() { sed -i 's#^exec "\$HERE/\([^"]*\)" "\$@"#exec "$HERE/\1" --no-sandbox "$@"#' "$1/AppRun"; }
 m_apprun_short_unset() { sed -i 's/ CHROME_DEVEL_SANDBOX//' "$1/AppRun"; }
 m_apprun_short_unset_tail() { sed -i 's/ NODE_OPTIONS//' "$1/AppRun"; }
@@ -296,6 +302,11 @@ for k in $KINDS; do
   attempt "SOURCE.txt without release tag line" $k m_source_no_tagline "no 'release tag:' line"
   attempt "SOURCE.txt without upstream commit" $k m_source_no_upstream "does not name the upstream commit"
   attempt "flip a fuse (RunAsNode on)" $k m_flip_fuse "RunAsNode"
+  attempt "flip a fuse (V8 snapshot on, index 6)" $k m_flip_fuse_v8snapshot "LoadBrowserProcessSpecificV8Snapshot"
+  attempt "flip a fuse (wasm trap handlers off, index 8)" $k m_flip_fuse_wasmtrap "WasmTrapHandlers"
+  attempt "symlink to /etc/passwd in resources/" $k m_symlink_abs "symlink(s) resolve outside the artifact tree"
+  attempt "relative symlink climbing out of the tree" $k m_symlink_rel "symlink(s) resolve outside the artifact tree"
+  attempt "directory symlink to /etc in the app dir" $k m_symlink_dir "symlink(s) resolve outside the artifact tree"
   attempt "remove all .desktop entries (empty glob)" $k m_rm_desktop "re:(no \\.desktop file in the artifact|found no desktop entry or launcher to scan for forbidden flags)"
   attempt "desktop entry loses MimeType" $k m_desktop_no_pdf "no MimeType=application/pdf"
   attempt "desktop Exec loses %f" $k m_desktop_no_percent_f "Exec does not end in %f"
@@ -422,6 +433,10 @@ if [ "$APPIMAGE_ONLY" = 0 ]; then
   attempt_scripts "postinst without AppArmor check" deb postinst 's/apparmor_restrict_unprivileged_userns/x/g' "AppArmor userns restriction"
   attempt_scripts "postinst without setuid fallback" deb postinst 's/chmod 4755/chmod 0755/' "no setuid fallback"
   attempt_scripts "postinst adds --no-sandbox" deb postinst '$a echo --no-sandbox' "forbidden flag in a maintainer script"
+  attempt_scripts "postinst exports ELECTRON_DISABLE_SANDBOX" deb postinst '$a export ELECTRON_DISABLE_SANDBOX=1' "environment variable"
+  attempt_scripts "postinst has an unconditional chmod 4755" deb postinst '0,/^set -u$/s//set -u\nchmod 4755 "$SANDBOX"/' "more than one"
+  attempt_scripts "postinst loses the post-profile re-probe" deb postinst 's/install_apparmor_profile && userns_works_for_nobody/install_apparmor_profile/' "re-probe"
+  attempt_scripts "rpm scriptlet exports ELECTRON_DISABLE_SANDBOX" rpm rpm-scripts.txt '$a export ELECTRON_DISABLE_SANDBOX=1' "environment variable"
   attempt_scripts "rpm scriptlet missing" rpm rpm-scripts.txt DELETE "missing or empty maintainer script"
   attempt_scripts "rpm scriptlet without setpriv probe" rpm rpm-scripts.txt 's/setpriv --reuid=65534/true/' "does not probe user namespaces"
 fi

@@ -47,6 +47,17 @@ jobs:
       - name: AGPL license present
         run: grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE' LICENSE
 
+  gate-unit:
+    name: Packaging gate unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: postinst policy and symlink checks (no built artifact needed)
+        run: packaging/test-check-postinst.sh
+
   shellcheck:
     name: Shell scripts
     runs-on: ubuntu-latest
