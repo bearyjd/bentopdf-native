@@ -1,5 +1,7 @@
-# Allowlist for scripts/verify-offline.sh.  Format (TAB-separated): host, file regex (relative to dist), reason.
-# A hit is allowed only if BOTH the host and the file match. Anything else fails the build (STRICT=1).
+# Allowlist for scripts/verify-offline.sh.  Format (TAB-separated): host, file regex (relative to dist, must start with ^),
+# reason, and an optional 4th column: regex (must start with ^) that must match the WHOLE URL path+query, e.g. ^/npm/pkg@1/.*
+# A hit is allowed only if the host equals, the file regex matches from the start of the path without leaving a "/"
+# unmatched, and (when given) the URL path matches. Anything else fails the build (STRICT=1).
 # Static scan only: "dead default" and "blocked by CSP" claims are inferred from source and the generated
 # _headers, NOT verified in a browser. The generated CSP contains no external origin (check-dist.sh).
 #

@@ -27,3 +27,4 @@ desktop/release/
 desktop/release-smoke/
 packaging/generated/
 packaging/flatpak/.build/
+scripts/checksums.sha256.proposed

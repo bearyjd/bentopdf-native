@@ -12,10 +12,13 @@ DIST="${1:-$ROOT/dist}"
 die() { echo "CHECK FAILED: $*" >&2; exit 1; }
 [ -d "$DIST" ] || die "no such dir: $DIST"
 
-# NOTICE legitimately names the excluded products; every other file must not.
-# grep exit codes: 0 match, 1 none, >=2 error (must not be mistaken for "none")
-rc=0; hits="$(grep -ril --exclude=NOTICE 'hyper-compress-wasm' "$DIST")" || rc=$?
+DIST="$(cd "$DIST" && pwd)"   # canonical, so the NOTICE exemption below compares exact paths
+
+# NOTICE legitimately names the excluded products, but only the one at the bundle root: a NOTICE (or any
+# other file) deeper in the tree must not. grep exit codes: 0 match, 1 none, >=2 error (not "none").
+rc=0; matches="$(grep -ril -- 'hyper-compress-wasm' "$DIST")" || rc=$?
 [ "$rc" -le 1 ] || die "grep failed while scanning $DIST"
+hits="$(printf '%s\n' "$matches" | awk -v root="$DIST/NOTICE" 'NF && $0 != root')"
 [ -z "$hits" ] || die "excluded product 'hyper-compress-wasm' referenced in: $(echo "$hits" | awk 'NR<=5')"
 
 found="$(find "$DIST" \( -iname '*kura*' -o -iname '*hyper-compress*' \) -print)"
