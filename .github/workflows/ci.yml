@@ -70,3 +70,17 @@ jobs:
           done < "$RUNNER_TEMP/all.nul"
           if [ ! -s "$RUNNER_TEMP/scripts.list" ]; then echo "no shell scripts"; exit 0; fi
           xargs -0 shellcheck -S warning -- < "$RUNNER_TEMP/scripts.list"
+
+  gate-tests:
+    name: Gate script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Offline scanner, upstream pin and build guards
+        run: |
+          bash scripts/test-verify-offline.sh
+          bash scripts/test-upstream.sh
+          bash scripts/test-build-local-guards.sh

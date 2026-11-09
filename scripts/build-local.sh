@@ -4,10 +4,14 @@
 # same-origin, root-relative URLs, so nothing is fetched from a CDN at runtime.
 # Asset download/versions logic mirrors upstream scripts/prepare-airgap.sh.
 #
-# Usage: scripts/build-local.sh [--update-checksums]
-#   --update-checksums  re-download every artifact (network), rewrite
-#                       scripts/checksums.sha256, print the diff, and stop.
-#                       Review the diff before committing: it is trust-on-first-use.
+# Usage: scripts/build-local.sh [--update-checksums | --accept-checksums=<sha256>]
+#   --update-checksums  re-download every artifact (network), write the PROPOSED sums to
+#                       scripts/checksums.sha256.proposed (the pinned file is not touched),
+#                       print the diff and the proposal's digest, and stop. Trust-on-first-use:
+#                       review the diff.
+#   --accept-checksums=<sha256>
+#                       install the proposal as scripts/checksums.sha256, but only if its digest
+#                       equals the one printed at review time (so what was reviewed is what lands).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,12 +20,15 @@ info() { echo "==> $*"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
 
 UPDATE_CHECKSUMS=false
+ACCEPT=false; ACCEPT_DIGEST=""
 for a in "$@"; do
   case "$a" in
     --update-checksums) UPDATE_CHECKSUMS=true ;;
-    *) die "unknown argument: $a (supported: --update-checksums)" ;;
+    --accept-checksums=*) ACCEPT=true; ACCEPT_DIGEST="${a#--accept-checksums=}" ;;
+    *) die "unknown argument: $a (supported: --update-checksums, --accept-checksums=<sha256>)" ;;
   esac
 done
+[ "$UPDATE_CHECKSUMS" != true ] || [ "$ACCEPT" != true ] || die "--update-checksums and --accept-checksums are separate steps"
 
 # --- configuration (all overridable via environment) -------------------------
 # Paths use "-" (unset only) so an explicitly empty value is refused, not defaulted.
@@ -45,9 +52,33 @@ TESSDATA_PKG_VERSION="${TESSDATA_PKG_VERSION:-1.0.0}"    # exact npm version of 
 SITE_URL="${SITE_URL:-https://www.bentopdf.com}"   # canonical/sitemap metadata only; upstream seo-audit fails if changed
 NPM_CI_FLAGS="${NPM_CI_FLAGS:---allow-remote=root}"  # upstream needs xlsx from cdn.sheetjs.com (lockfile-pinned integrity)
 SKIP_FETCH="${SKIP_FETCH:-false}"
+# SKIP_INSTALL=true reuses an existing node_modules WITHOUT verifying it (verify-upstream.sh does not cover
+# node_modules): only use it on a node_modules you installed yourself with "npm ci --ignore-scripts".
 SKIP_INSTALL="${SKIP_INSTALL:-false}"
-CHECKSUMS="$ROOT/scripts/checksums.sha256"
+# CHECKSUMS_FILE is a TEST-ONLY override (scripts/test-build-local-guards.sh points the accept flow at a
+# scratch file). Never set it in a real build: it replaces the pinned artifact checksums.
+CHECKSUMS="${CHECKSUMS_FILE-$ROOT/scripts/checksums.sha256}"
+PROPOSED="$CHECKSUMS.proposed"
+# shellcheck disable=SC2034  # used by scripts/lib-artifacts.sh
 CURL_OPTS=(-fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 2)
+
+if [ "$ACCEPT" = true ]; then
+  [[ "$ACCEPT_DIGEST" =~ ^[0-9a-f]{64}$ ]] || die "--accept-checksums needs the 64-hex sha256 printed by --update-checksums"
+  [ ! -L "$PROPOSED" ] || die "$PROPOSED is a symlink; refusing"
+  [ -f "$PROPOSED" ] || die "no proposal at $PROPOSED; run --update-checksums first"
+  # TOCTOU: copy the proposal into a private (0700) temp dir, then hash and install THAT copy, never the
+  # original, which anyone with write access to the checkout can swap between hashing and installing.
+  AT="$(mktemp -d)"; trap 'rm -rf "$AT"' EXIT
+  cp -P -- "$PROPOSED" "$AT/proposal"
+  { [ -f "$AT/proposal" ] && [ ! -L "$AT/proposal" ]; } || die "$PROPOSED is not a regular file; refusing"
+  got="$(sha256sum < "$AT/proposal" | awk '{print $1}')"
+  [ "$got" = "$ACCEPT_DIGEST" ] || die "proposal digest is $got, not the reviewed $ACCEPT_DIGEST; re-review the proposal"
+  cp -- "$AT/proposal" "$CHECKSUMS.new.$$"
+  mv -f -- "$CHECKSUMS.new.$$" "$CHECKSUMS"
+  rm -f -- "$PROPOSED"
+  info "installed $CHECKSUMS (digest $got)"
+  exit 0
+fi
 
 for c in node npm curl tar git gzip sha256sum perl realpath; do command -v "$c" >/dev/null || die "missing: $c"; done
 
@@ -70,8 +101,14 @@ for p in "$ROOT" "$UP" "$CACHE_DIR"; do
 done
 ! is_within "$OUT_DIR" "$UP" || die "refusing OUT_DIR=$OUT_DIR: it is inside the upstream checkout"
 ! is_within "$OUT_DIR" "$CACHE_DIR" || die "refusing OUT_DIR=$OUT_DIR: it is inside the cache"
-if [ -e "$OUT_DIR" ] && [ -n "$(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] && [ ! -f "$OUT_DIR/index.html" ]; then
-  die "refusing to wipe $OUT_DIR: not empty and does not look like a previous bundle (no index.html)"
+BUNDLE_MARKER=".bentopdf-local-bundle"   # written first when assembling, so an interrupted build is still recognised
+BUNDLE_HEADER="Corresponding source / AGPL-3.0 notice"   # first line of SOURCE.txt (bundles built before the marker existed)
+is_our_bundle() { # dir : created by this script (marker, or legacy SOURCE.txt header next to index.html)
+  [ -f "$1/$BUNDLE_MARKER" ] && return 0
+  [ -f "$1/index.html" ] && [ -f "$1/SOURCE.txt" ] && [ "$(head -n1 -- "$1/SOURCE.txt")" = "$BUNDLE_HEADER" ]
+}
+if [ -e "$OUT_DIR" ] && [ -n "$(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] && ! is_our_bundle "$OUT_DIR"; then
+  die "refusing to wipe $OUT_DIR: not empty and not a bundle built by this script (no $BUNDLE_MARKER, no SOURCE.txt header)"
 fi
 
 [[ "$BASE_URL" =~ ^/[A-Za-z0-9/_.-]*$ ]] && [[ "$BASE_URL" != *..* ]] || die "BASE_URL must start with / and use only [A-Za-z0-9/_.-] (no ..)"
@@ -102,76 +139,17 @@ if [ -n "$BRAND_LOGO_FILE" ]; then
   VITE_BRAND_LOGO="brand/$logo_name"
 fi
 
-# --- checksummed downloads ---------------------------------------------------
-sum_of()  { sha256sum "$1" | awk '{print $1}'; }
-want_of() { awk -v k="$1" '$2==k{print $1; exit}' "$CHECKSUMS"; }
-
-verify_or_die() { # key file : compare against scripts/checksums.sha256, delete file on failure
-  local key=$1 file=$2 want got
-  want="$(want_of "$key")"
-  [ -n "$want" ] || { rm -f "$file"; die "no pinned checksum for $key; review the source, then run scripts/build-local.sh --update-checksums"; }
-  got="$(sum_of "$file")"
-  [ "$got" = "$want" ] || { rm -f "$file"; die "checksum mismatch for $key (pinned $want, got $got); cache entry deleted"; }
-}
-
-check_members() { # tgz : reject absolute paths, .. components and any link member
-  local names links
-  tar tzf "$1" >/dev/null 2>&1 || die "$1 is not a readable tar.gz"
-  names="$(tar tzf "$1" | awk '/^\// || /(^|\/)\.\.(\/|$)/')"
-  [ -z "$names" ] || die "$1 contains unsafe member paths: $(echo "$names" | awk 'NR==1')"
-  links="$(tar tvzf "$1" | awk '$1 ~ /^[lh]/')"
-  [ -z "$links" ] || die "$1 contains link members; refusing"
-}
-
-validate_file() { # key file : structural check of a downloaded file
-  case "$1" in
-    *.tgz) check_members "$2" ;;
-    *.gz)  gzip -t "$2" 2>/dev/null || die "$1 is not valid gzip" ;;
-    *)     [ -s "$2" ] || die "$1 is empty" ;;
-  esac
-}
-
+# --- checksummed downloads (scripts/lib-artifacts.sh) -------------------------
+# shellcheck source=scripts/lib-artifacts.sh
 NEWSUMS="$T/newsums"; : > "$NEWSUMS"
-ACQUIRED=""
-acquire() { # key kind(npm|url) arg : verified file lands at $CACHE_DIR/<key>, path in $ACQUIRED
-  local key=$1 kind=$2 arg=$3 f="$CACHE_DIR/$1" part tmp
-  ACQUIRED="$f"
-  mkdir -p "$(dirname "$f")"
-  if [ "$UPDATE_CHECKSUMS" != true ] && [ -f "$f" ]; then
-    verify_or_die "$key" "$f"        # every cache hit is re-verified
-    return 0
-  fi
-  part="$f.part"; rm -f "$part"
-  info "downloading $key"
-  if [ "$kind" = npm ]; then
-    tmp="$(mktemp -d)"
-    (cd "$tmp" && npm pack "$arg" --ignore-scripts --quiet >/dev/null) || die "npm pack $arg failed"
-    mv -- "$tmp"/*.tgz "$part"; rmdir "$tmp"
-  else
-    curl "${CURL_OPTS[@]}" "$arg" -o "$part" || { rm -f "$part"; die "download failed: $arg"; }
-  fi
-  validate_file "$key" "$part"
-  if [ "$UPDATE_CHECKSUMS" = true ]; then
-    printf '%s  %s\n' "$(sum_of "$part")" "$key" >> "$NEWSUMS"
-  else
-    verify_or_die "$key" "$part"      # verified BEFORE it enters the cache
-  fi
-  mv -- "$part" "$f"
-}
-
-npm_artifact() { # spec -> cached tgz (npm pack output is the registry tarball)
-  acquire "npm/$(echo "$1" | sed 's#^@##; s#/#-#; s#@#-#').tgz" npm "$1"
-}
-
-safe_untar() { # tgz dest [strip-components]
-  check_members "$1"
-  mkdir -p "$2"
-  tar xzf "$1" --no-same-owner -C "$2" --strip-components="${3:-0}"
-}
+. "$ROOT/scripts/lib-artifacts.sh"
 
 # --- 1. upstream checkout ----------------------------------------------------
 if [ "$SKIP_FETCH" != true ]; then UPSTREAM_DIR="$UP" "$ROOT/scripts/fetch-upstream.sh"; fi
 [ -f "$UP/package.json" ] || die "$UP not found; run scripts/fetch-upstream.sh"
+# SKIP_FETCH only skips the network; it must never skip trust. The checkout has to be the pinned
+# UPSTREAM_COMMIT plus exactly patches/*.patch, whoever produced it.
+"$ROOT/scripts/verify-upstream.sh" "$UP"
 cd "$UP"
 
 # --- 2. versions (read from upstream, as prepare-airgap.sh does) -------------
@@ -230,13 +208,13 @@ done
 # OCR fonts: same resolution as prepare-airgap.sh (Noto Sans + per-language family)
 FONT_MANIFEST=$(node -e "const fs=require('fs');const src=fs.readFileSync(process.argv[1],'utf8');const sel=(process.argv[2]||'').split(',').filter(Boolean);const s=src.split('export const fontFamilyToUrl');const l2f={},f2u={};let m;const lp=/^\s*([a-z_]+):\s*'([^']+)',/gm;while((m=lp.exec(s[0]))!==null)l2f[m[1]]=m[2];const fp=/^\s*'([^']+)':\s*'([^']+)',/gm;while((m=fp.exec(s[1]||''))!==null)f2u[m[1]]=m[2];const fam=new Set(['Noto Sans']);for(const x of sel)fam.add(l2f[x]||'Noto Sans');process.stdout.write(Array.from(fam).sort().map(f=>{const u=f2u[f]||f2u['Noto Sans'];return f+'\t'+u+'\t'+u.split('/').pop()}).join('\n'))" src/js/config/font-mappings.ts "$OCR_LANGUAGES")
 [ -n "$FONT_MANIFEST" ] || die "could not resolve OCR fonts"
-FONT_FILES=()
+FONT_FILES=(); declare -A FONT_SRC
 while IFS=$'\t' read -r fam url file; do
   [ -z "$file" ] && continue
   [[ "$url" =~ ^https:// ]] || die "OCR font URL for '$fam' is not https: $url"
   [[ "$file" =~ ^[A-Za-z0-9._-]+$ ]] || die "unsafe OCR font file name: $file"
   acquire "ocr-fonts/$file" url "$url"
-  FONT_FILES+=("$file")
+  FONT_FILES+=("$file"); FONT_SRC[$file]="$ACQUIRED"
 done <<< "$FONT_MANIFEST"
 
 # Edit PDF fallback fonts (upstream: src/js/config/editor-fonts.ts, VITE_EMBEDPDF_FONTS_URL)
@@ -255,8 +233,9 @@ if [ "$UPDATE_CHECKSUMS" = true ]; then
   { cat "$NEWSUMS"; awk 'NR==FNR{n[$2]=1; next} !($2 in n)' "$NEWSUMS" "$CHECKSUMS"; } | sort -k2,2 > "$MERGED"
   rc=0; diff -u "$CHECKSUMS" "$MERGED" || rc=$?
   [ "$rc" -le 1 ] || die "diff failed"
-  cp -- "$MERGED" "$CHECKSUMS"
-  info "wrote $CHECKSUMS; review the diff above before committing"
+  cp -- "$MERGED" "$PROPOSED"
+  info "wrote $PROPOSED; $CHECKSUMS is unchanged. Review the diff above, then run:"
+  info "  scripts/build-local.sh --accept-checksums=$(sum_of "$MERGED")"
   exit 0
 fi
 
@@ -282,6 +261,7 @@ npm run build
 # --- 7. assemble ./dist ------------------------------------------------------
 info "assembling $OUT_DIR"
 rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
+: > "$OUT_DIR/$BUNDLE_MARKER"
 cp -a "$UP/dist/." "$OUT_DIR/"
 W="$OUT_DIR/wasm"
 mkdir -p "$W/pymupdf" "$W/gs" "$W/cpdf" "$W/ocr/core" "$W/ocr/lang-data" "$W/ocr/fonts"
@@ -295,7 +275,7 @@ safe_untar "$TESS_TGZ" "$T/tess"
 cp "$T/tess/package/dist/worker.min.js" "$W/ocr/worker.min.js"
 safe_untar "$CORE_TGZ" "$W/ocr/core" 1
 for l in "${LANGS[@]}"; do cp "${LANG_FILE[$l]}" "$W/ocr/lang-data/$l.traineddata.gz"; done
-for file in "${FONT_FILES[@]}"; do cp "$CACHE_DIR/ocr-fonts/$file" "$W/ocr/fonts/"; done
+for file in "${FONT_FILES[@]}"; do cp "${FONT_SRC[$file]}" "$W/ocr/fonts/$file"; done
 for p in "${FONT_PACKS[@]}"; do
   safe_untar "${PACK_TGZ[$p]}" "$W/embedpdf-fonts/fonts-$p@${PACK_VER[$p]}" 1
 done
@@ -338,7 +318,7 @@ UP_TAG="$(tr -d '[:space:]' < "$ROOT/UPSTREAM_VERSION")"
 BUILD_DATE="$(date -u -d "@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y-%m-%dT%H:%M:%SZ)"
 LO_VERSION="$(node -p "require('./node_modules/@matbee/libreoffice-converter/package.json').version" 2>/dev/null || echo unknown)"
 {
-  echo "Corresponding source / AGPL-3.0 notice"
+  echo "$BUNDLE_HEADER"
   echo "======================================"
   echo "This bundle is licensed under the GNU Affero General Public License v3.0 (LICENSE)."
   echo "Third-party components and their licences: NOTICE (shipped next to this file)."
@@ -352,6 +332,7 @@ LO_VERSION="$(node -p "require('./node_modules/@matbee/libreoffice-converter/pac
   echo "Upstream BentoPDF source:     https://github.com/alam00000/bentopdf"
   echo "  tag:           $UP_TAG"
   echo "  commit:        $UP_COMMIT"
+  echo "  tree:          verified = pinned commit + patches/*.patch only (scripts/verify-upstream.sh)"
   echo "  patches:       $(find "$ROOT/patches" -maxdepth 1 -name '*.patch' | awk 'END{print NR}') (patches/*.patch in the recipe repository)"
   echo "Build date (UTC): $BUILD_DATE"
   echo
@@ -366,5 +347,9 @@ LO_VERSION="$(node -p "require('./node_modules/@matbee/libreoffice-converter/pac
 # --- 9. gates ----------------------------------------------------------------
 "$ROOT/scripts/check-dist.sh" "$OUT_DIR"
 STRICT=1 "$ROOT/scripts/verify-offline.sh" "$OUT_DIR"
+
+# The marker only protects an unfinished bundle (the next run may wipe it); a finished one is identified by
+# SOURCE.txt and must not ship a stray dotfile.
+rm -f "$OUT_DIR/$BUNDLE_MARKER"
 
 info "done: $OUT_DIR ($(du -sh "$OUT_DIR" | cut -f1))"

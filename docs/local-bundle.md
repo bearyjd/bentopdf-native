@@ -8,7 +8,8 @@ The *build* needs network (npm, jsDelivr for tessdata/fonts, GitHub); the
 ```
 scripts/fetch-upstream.sh     # clone tag into ./upstream, verify commit, apply patches/*.patch
 scripts/build-local.sh        # fetch + npm ci --ignore-scripts + vite build + assemble ./dist + gates
-scripts/build-local.sh --update-checksums   # re-download artifacts, rewrite scripts/checksums.sha256, print diff, stop
+scripts/build-local.sh --update-checksums   # re-download artifacts, write scripts/checksums.sha256.proposed, print diff + digest, stop
+scripts/build-local.sh --accept-checksums=<digest>  # install the reviewed proposal (digest must match)
 scripts/check-dist.sh         # hard assertions on ./dist (excluded products, source offer, CSP)
 scripts/verify-offline.sh     # gate: external hosts in ./dist must be in scripts/offline-allowlist.txt
 ```
@@ -51,9 +52,14 @@ patches**: nothing in upstream v2.8.10 needed one (see "Hyper Compress / Kura").
   curl uses `--proto '=https' --proto-redir '=https' --tlsv1.2`.
   The committed checksums cover the default selection only
   (`OCR_LANGUAGES=eng`, default font packs, `latin,arabic,hebrew`). For other
-  languages/packs run `scripts/build-local.sh --update-checksums`, review the
-  printed diff, and commit it: that step is trust-on-first-use (the first
+  languages/packs run `scripts/build-local.sh --update-checksums`: it leaves
+  `checksums.sha256` untouched, writes `checksums.sha256.proposed`, prints the diff
+  and the proposal's sha256. Review the diff, then run
+  `scripts/build-local.sh --accept-checksums=<that digest>` (refused if the proposal
+  changed since) and commit. That step is trust-on-first-use (the first
   checksums were cross-checked against files cached by an earlier build).
+  Artifacts are copied into a private temp dir and verified there; the build uses
+  only that copy, so rewriting `.cache/wasm` after verification has no effect.
 - `@tesseract.js-data/<lang>` is pinned to an exact version
   (`TESSDATA_PKG_VERSION`, default `1.0.0`), no floating `latest`.
 
@@ -77,8 +83,8 @@ All are environment variables of `scripts/build-local.sh`.
 | `SITE_URL` | `https://www.bentopdf.com` | Canonical/sitemap metadata only. Upstream's `seo-audit` fails the build if changed, so leave it. |
 | `KEEP_BROTLI` | `false` | Upstream's vite config always writes `.br` sidecars; they are deleted unless `true`. |
 | `NPM_CI_FLAGS` | `--allow-remote=root` | Extra flags for `npm ci --ignore-scripts`; see "Supply chain and integrity". |
-| `SKIP_FETCH` / `SKIP_INSTALL` | `false` | Reuse the existing `./upstream` / `node_modules`. |
-| `UPSTREAM_DIR`, `OUT_DIR`, `CACHE_DIR` | `./upstream`, `./dist`, `./.cache/wasm` | Locations, canonicalised with `realpath` before anything is deleted. `OUT_DIR` is refused if empty, `/`, `$HOME`, the repo root, an ancestor of the repo/upstream/cache, or inside upstream/cache; an existing non-empty `OUT_DIR` must contain `index.html`. |
+| `SKIP_FETCH` / `SKIP_INSTALL` | `false` | Reuse the existing `./upstream` / `node_modules`. `SKIP_INSTALL` uses `node_modules` as-is and UNVERIFIED (the upstream check does not cover it; only use your own `npm ci --ignore-scripts` result). `SKIP_FETCH` skips only the network: `scripts/verify-upstream.sh` still requires the checkout to be exactly `UPSTREAM_COMMIT` plus `patches/*.patch` (no other modified or untracked files, no hidden tracked changes). |
+| `UPSTREAM_DIR`, `OUT_DIR`, `CACHE_DIR` | `./upstream`, `./dist`, `./.cache/wasm` | Locations, canonicalised with `realpath` before anything is deleted. `OUT_DIR` is refused if empty, `/`, `$HOME`, the repo root, an ancestor of the repo/upstream/cache, or inside upstream/cache; an existing non-empty `OUT_DIR` must have been built by this script: it contains the `.bentopdf-local-bundle` marker (present while a build is unfinished) or `index.html` plus a `SOURCE.txt` with the AGPL header. |
 
 Fixed by the script (set as env for vite, all same-origin, root-relative):
 
@@ -204,18 +210,25 @@ simd/relaxedsimd/lstm); localized HTML is 76 MB of the total.
 This is a gate, not a report. `STRICT=1` (default, and what `build-local.sh`
 runs) exits non-zero for any external host that `scripts/offline-allowlist.txt`
 does not cover; `STRICT=0` only reports. The allowlist is committed, one entry
-per line: `host<TAB>file regex<TAB>reason`; a hit passes only if host and file
-both match. A new host, or a known host in a new file, fails the build until it
+per line: `host<TAB>file regex<TAB>reason[<TAB>url-path regex]`; a hit passes only if
+the host is equal, the file regex (must start with `^`) matches from the start
+of the path and leaves no `/` unmatched (a prefix entry cannot cover a subdirectory),
+and, when the optional 4th column is present (must start with `^`), it matches the
+whole URL path+query. Existing entries do not pin a URL path yet. A new host, or a known host in a new file, fails the build until it
 is reviewed and added with a reason.
 
-Scope: HTML is scanned only inside resource-loading tags (not `<a href>`,
+Scope: HTML is scanned inside resource-loading tags, `<meta http-equiv=refresh>`,
+`style=""` attributes and inline `<script>`/`<style>` bodies (not `<a href>`,
 canonical, hreflang, JSON-LD); JS/CSS/JSON/SVG/`_headers` are scanned fully.
+Protocol-relative `//host/x` after a quote, `(` or `=` counts like `https://host/x`.
 The vendored engine directories (`wasm/pymupdf`, `wasm/gs`, `wasm/ocr/core`,
 `libreoffice-wasm`, `pdfjs-*viewer`) are now scanned too, but only hosts that
 look like CDN/API hosts (`cdn`, `jsdelivr`, `githack`, `googleapis`, `gstatic`,
-`cloudflare`, `workers.dev`, ...) are reported there, because the engines are
-full of documentation links. Non-CDN hosts inside the engines are therefore NOT
-checked, and binary/compressed files (`.wasm`, `.gz`, `.data`) are not scanned
+`cloudflare`, `workers.dev`, ...) or that are handed straight to
+`fetch`/`import`/`importScripts`/`open`/`WebSocket`/`.src=`/`@import` are reported
+there, because the engines are full of documentation links (`ENGINE_ALL=1` lists
+every URL for an audit). A non-CDN host built or passed indirectly inside an engine is
+still NOT checked, and binary/compressed files (`.wasm`, `.gz`, `.data`) are not scanned
 at all. This is a static string scan; it cannot prove the absence of requests
 built at runtime.
 
@@ -262,6 +275,13 @@ those are navigation, not fetches, and are not counted.
   browser; `'unsafe-eval'`/`'unsafe-inline'` remain in the policy.
 - The committed checksums are trust-on-first-use; `--update-checksums` needs
   review of its diff.
+
+## Gate tests
+
+`scripts/test-verify-offline.sh`, `scripts/test-upstream.sh` and
+`scripts/test-build-local-guards.sh` (run in CI, job "Gate script tests") feed each
+gate a bundle/checkout that must be rejected and the nearest legitimate one that must
+pass. Deleting a guard makes at least one of them fail.
 
 ## Deferred to M2
 

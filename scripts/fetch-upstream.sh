@@ -7,7 +7,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UPSTREAM_DIR="${UPSTREAM_DIR:-$ROOT/upstream}"
+# "-" (unset only): an explicitly empty UPSTREAM_DIR is refused below, not silently defaulted.
+UPSTREAM_DIR="${UPSTREAM_DIR-$ROOT/upstream}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/alam00000/bentopdf.git}"
 TAG="$(tr -d '[:space:]' < "$ROOT/UPSTREAM_VERSION")"
 COMMIT="$(tr -d '[:space:]' < "$ROOT/UPSTREAM_COMMIT")"
@@ -25,9 +26,20 @@ verify_commit() {
 
 if [ ! -e "$UPSTREAM_DIR" ]; then
   echo "==> cloning $UPSTREAM_REPO @ $TAG"
-  git clone --quiet --depth 1 --branch "$TAG" "$UPSTREAM_REPO" "$UPSTREAM_DIR"
-  verify_commit
-  : > "$UPSTREAM_DIR/.git/upstream-managed"
+  # Clone into a sibling temp dir and rename only after the commit check passed and the marker exists,
+  # so a failed or interrupted clone never leaves an unmarked directory that the next run would refuse.
+  mkdir -p "$(dirname "$UPSTREAM_DIR")"
+  TMP_CLONE="$(mktemp -d "$UPSTREAM_DIR.partial.XXXXXX")"
+  trap 'rm -rf "$TMP_CLONE"' EXIT
+  git clone --quiet --depth 1 --branch "$TAG" "$UPSTREAM_REPO" "$TMP_CLONE"
+  UPSTREAM_DIR="$TMP_CLONE" verify_commit
+  : > "$TMP_CLONE/.git/upstream-managed"
+  # Portable (no GNU-only mv flags): plain mv would move INTO a directory that appeared at the destination
+  # meanwhile, so re-check right before and confirm the marker landed where expected.
+  [ ! -e "$UPSTREAM_DIR" ] || die "$UPSTREAM_DIR appeared while cloning; refusing to move into it"
+  mv -- "$TMP_CLONE" "$UPSTREAM_DIR"
+  [ -f "$UPSTREAM_DIR/.git/upstream-managed" ] || die "moving the clone to $UPSTREAM_DIR failed"
+  trap - EXIT
 else
   [ -d "$UPSTREAM_DIR/.git" ] || die "$UPSTREAM_DIR exists but is not a git checkout; refusing to touch it"
   origin="$(git -C "$UPSTREAM_DIR" remote get-url origin 2>/dev/null || true)"
@@ -51,4 +63,5 @@ for p in "${patches[@]}"; do
   git -C "$UPSTREAM_DIR" apply "$p"
   echo "    applied"
 done
+"$ROOT/scripts/verify-upstream.sh" "$UPSTREAM_DIR"
 echo "==> upstream $TAG ($COMMIT) ready (${#patches[@]} patch(es))"
