@@ -14,6 +14,8 @@ err_has() { grep -q -- "$1" "$T/err" && echo yes || echo no; }
 bl() { UPSTREAM_DIR="$T/no-such-upstream" OUT_DIR="$1" CACHE_DIR="$T/cache" SKIP_FETCH=true SKIP_INSTALL=true "$HERE/build-local.sh"; }
 refused() { status_of bl "$1" >/dev/null; err_has 'refusing to wipe'; }
 mkdir "$T/o1"; echo hi > "$T/o1/index.html"; echo precious > "$T/o1/mine.txt"
+snapshot() { (cd "$1" && find . -print0 | sort -z | xargs -0 sha256sum 2>/dev/null; find . | sort); }
+before_o1="$(snapshot "$T/o1")"
 check "OUT_DIR with only an index.html is refused" yes "$(refused "$T/o1")"
 mkdir "$T/o2"; echo hi > "$T/o2/index.html"; printf 'Not our header\n' > "$T/o2/SOURCE.txt"
 check "OUT_DIR with a foreign SOURCE.txt is refused" yes "$(refused "$T/o2")"
@@ -25,7 +27,8 @@ mkdir "$T/o5"; : > "$T/o5/.bentopdf-local-bundle"; echo partial > "$T/o5/assets"
 check "interrupted bundle (marker) is accepted" no "$(refused "$T/o5")"
 mkdir "$T/o6"
 check "empty OUT_DIR is accepted" no "$(refused "$T/o6")"
-check "refusal left the directory untouched" "mine.txt" "$(basename "$T"/o1/mine.txt)"
+check "refusal left the directory untouched (content hashes + listing)" "$before_o1" "$(snapshot "$T/o1")"
+check "  ... snapshot is non-trivial" yes "$([ "$(printf '%s\n' "$before_o1" | wc -l)" -ge 4 ] && echo yes || echo no)"
 
 # --- F6a: --update-checksums writes a proposal; --accept-checksums needs the reviewed digest ----
 CS="$T/checksums.sha256"
@@ -43,6 +46,18 @@ check "accept: reviewed digest installs the proposal" 0 "$(status_of acc --accep
 check "accept: pinned file is the reviewed proposal" "bbbb  new/key" "$(cat "$CS")"
 check "accept: proposal consumed" no "$([ -e "$CS.proposed" ] && echo yes || echo no)"
 check "accept: nothing to accept is refused" nonzero "$(status_of acc --accept-checksums="$digest")"
+# F6 review: the proposal is copied to a private dir; the copy is hashed AND installed.
+printf 'bbbb  new/key\n' > "$CS.proposed"; printf 'aaaa  old/key\n' > "$CS"
+mkdir "$T/shimbin"; REALSUM="$(command -v sha256sum)"
+printf '#!/usr/bin/env bash\n%s "$@"; rc=$?\nif [ -n "${SWAP_AFTER_HASH:-}" ]; then rm -f "$SWAP_AFTER_HASH"; printf "cccc  evil/key\\n" > "$SWAP_AFTER_HASH"; fi\nexit $rc\n' "$REALSUM" > "$T/shimbin/sha256sum"; chmod +x "$T/shimbin/sha256sum"
+check "accept: proposal swapped right after hashing still installs the reviewed copy" 0 "$(SWAP_AFTER_HASH="$CS.proposed" PATH="$T/shimbin:$PATH" status_of acc --accept-checksums="$digest")"
+check "accept: installed file is the reviewed content, not the swapped one" "bbbb  new/key" "$(cat "$CS")"
+printf 'bbbb  new/key\n' > "$T/real-proposal"; ln -s "$T/real-proposal" "$CS.proposed"; printf 'aaaa  old/key\n' > "$CS"
+check "accept: symlinked proposal is refused" nonzero "$(status_of acc --accept-checksums="$digest")"
+check "accept: pinned file untouched after symlink refusal" "aaaa  old/key" "$(cat "$CS")"
+rm -f "$CS.proposed"
+# Static: the digest printed by --update-checksums must come from the merged file, not a re-read of the proposal.
+check "update: printed digest is computed from \$MERGED" yes "$(grep -q 'sum_of "\$MERGED"' "$HERE/build-local.sh" && ! grep -q 'sum_of "\$PROPOSED"' "$HERE/build-local.sh" && echo yes || echo no)"
 check "update and accept together are refused" nonzero "$(status_of acc --update-checksums --accept-checksums="$digest")"
 
 # --- F6b: artifacts are used from a private verified copy, never from the shared cache --------

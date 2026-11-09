@@ -5,9 +5,14 @@
 # ./upstream is untrusted input: it may be at another commit, hand-edited, or carry planted files.
 #  1. HEAD resolves to the commit pinned in UPSTREAM_COMMIT
 #  2. no tracked file is hidden from git (assume-unchanged / skip-worktree)
-#  3. every modified / untracked (non-ignored) path is a path some patch touches
+#  3. every modified / untracked path is a path some patch touches. Ignore rules are NOT honoured:
+#     core.excludesFile is neutralised, .gitignore / .git/info/exclude are not consulted
+#     (untracked files come from "git ls-files --others" without --exclude-standard), and any
+#     .env* file is refused outright.
 #  4. each of those paths has the content and exec bit of "pristine commit + patches" (rebuilt in a temp dir)
-# Ignored build output (node_modules, dist) is out of scope here; it is rebuilt by npm ci / npm run build.
+# Out of scope, and NOT verified here: the top-level node_modules/ and dist/ directories. "npm ci" rebuilds
+# node_modules and "npm run build" rebuilds dist ONLY when they run; with SKIP_INSTALL=true (build-local.sh)
+# a pre-existing node_modules is used as-is, unverified, and so is anything the build reads from it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +23,7 @@ UP="${1:-}"
 UP="$(cd "$UP" && pwd)"
 COMMIT="$(tr -d '[:space:]' < "$ROOT/UPSTREAM_COMMIT")"
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "UPSTREAM_COMMIT must be a 40-char lowercase hex sha"
-g() { git -C "$UP" "$@"; }
+g() { git -C "$UP" -c core.excludesFile=/dev/null "$@"; }
 
 got="$(g rev-parse 'HEAD^{commit}')"
 [ "$got" = "$COMMIT" ] || die "$UP is at $got, expected $COMMIT (UPSTREAM_COMMIT)"
@@ -46,13 +51,16 @@ for p in "${patches[@]}"; do
 done
 sort -u -o "$T/expected" "$T/expected"
 
-# Paths that differ from the commit (tracked changes and non-ignored untracked files).
+# Paths that differ from the commit: tracked changes plus ALL untracked files (no ignore rules applied;
+# only the top-level node_modules/ and dist/ are skipped, see the header).
 : > "$T/changed"
-g status --porcelain -z --untracked-files=all > "$T/status"
-while IFS= read -r -d '' rec; do
-  printf '%s\n' "${rec:3}" >> "$T/changed"
-  case "${rec:0:2}" in *R*|*C*) IFS= read -r -d '' old; printf '%s\n' "$old" >> "$T/changed" ;; esac
-done < "$T/status"
+g diff --no-renames --name-only -z HEAD -- > "$T/tracked"
+g ls-files --others -z -- . ':(exclude,top)node_modules' ':(exclude,top)dist' > "$T/untracked"
+while IFS= read -r -d '' path; do printf '%s\n' "$path" >> "$T/changed"; done < "$T/tracked"
+while IFS= read -r -d '' path; do
+  case "${path##*/}" in .env*) die "$UP contains an environment file ($path); refusing" ;; esac
+  printf '%s\n' "$path" >> "$T/changed"
+done < "$T/untracked"
 sort -u -o "$T/changed" "$T/changed"
 
 stray="$(comm -13 "$T/expected" "$T/changed")"

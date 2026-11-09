@@ -34,7 +34,11 @@ if [ ! -e "$UPSTREAM_DIR" ]; then
   git clone --quiet --depth 1 --branch "$TAG" "$UPSTREAM_REPO" "$TMP_CLONE"
   UPSTREAM_DIR="$TMP_CLONE" verify_commit
   : > "$TMP_CLONE/.git/upstream-managed"
-  mv -T -- "$TMP_CLONE" "$UPSTREAM_DIR"
+  # Portable (no GNU-only mv flags): plain mv would move INTO a directory that appeared at the destination
+  # meanwhile, so re-check right before and confirm the marker landed where expected.
+  [ ! -e "$UPSTREAM_DIR" ] || die "$UPSTREAM_DIR appeared while cloning; refusing to move into it"
+  mv -- "$TMP_CLONE" "$UPSTREAM_DIR"
+  [ -f "$UPSTREAM_DIR/.git/upstream-managed" ] || die "moving the clone to $UPSTREAM_DIR failed"
   trap - EXIT
 else
   [ -d "$UPSTREAM_DIR/.git" ] || die "$UPSTREAM_DIR exists but is not a git checkout; refusing to touch it"

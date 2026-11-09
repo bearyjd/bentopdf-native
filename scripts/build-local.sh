@@ -52,7 +52,11 @@ TESSDATA_PKG_VERSION="${TESSDATA_PKG_VERSION:-1.0.0}"    # exact npm version of 
 SITE_URL="${SITE_URL:-https://www.bentopdf.com}"   # canonical/sitemap metadata only; upstream seo-audit fails if changed
 NPM_CI_FLAGS="${NPM_CI_FLAGS:---allow-remote=root}"  # upstream needs xlsx from cdn.sheetjs.com (lockfile-pinned integrity)
 SKIP_FETCH="${SKIP_FETCH:-false}"
+# SKIP_INSTALL=true reuses an existing node_modules WITHOUT verifying it (verify-upstream.sh does not cover
+# node_modules): only use it on a node_modules you installed yourself with "npm ci --ignore-scripts".
 SKIP_INSTALL="${SKIP_INSTALL:-false}"
+# CHECKSUMS_FILE is a TEST-ONLY override (scripts/test-build-local-guards.sh points the accept flow at a
+# scratch file). Never set it in a real build: it replaces the pinned artifact checksums.
 CHECKSUMS="${CHECKSUMS_FILE-$ROOT/scripts/checksums.sha256}"
 PROPOSED="$CHECKSUMS.proposed"
 # shellcheck disable=SC2034  # used by scripts/lib-artifacts.sh
@@ -60,10 +64,18 @@ CURL_OPTS=(-fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 2)
 
 if [ "$ACCEPT" = true ]; then
   [[ "$ACCEPT_DIGEST" =~ ^[0-9a-f]{64}$ ]] || die "--accept-checksums needs the 64-hex sha256 printed by --update-checksums"
+  [ ! -L "$PROPOSED" ] || die "$PROPOSED is a symlink; refusing"
   [ -f "$PROPOSED" ] || die "no proposal at $PROPOSED; run --update-checksums first"
-  got="$(sha256sum < "$PROPOSED" | awk '{print $1}')"
+  # TOCTOU: copy the proposal into a private (0700) temp dir, then hash and install THAT copy, never the
+  # original, which anyone with write access to the checkout can swap between hashing and installing.
+  AT="$(mktemp -d)"; trap 'rm -rf "$AT"' EXIT
+  cp -P -- "$PROPOSED" "$AT/proposal"
+  { [ -f "$AT/proposal" ] && [ ! -L "$AT/proposal" ]; } || die "$PROPOSED is not a regular file; refusing"
+  got="$(sha256sum < "$AT/proposal" | awk '{print $1}')"
   [ "$got" = "$ACCEPT_DIGEST" ] || die "proposal digest is $got, not the reviewed $ACCEPT_DIGEST; re-review the proposal"
-  mv -- "$PROPOSED" "$CHECKSUMS"
+  cp -- "$AT/proposal" "$CHECKSUMS.new.$$"
+  mv -f -- "$CHECKSUMS.new.$$" "$CHECKSUMS"
+  rm -f -- "$PROPOSED"
   info "installed $CHECKSUMS (digest $got)"
   exit 0
 fi
@@ -223,7 +235,7 @@ if [ "$UPDATE_CHECKSUMS" = true ]; then
   [ "$rc" -le 1 ] || die "diff failed"
   cp -- "$MERGED" "$PROPOSED"
   info "wrote $PROPOSED; $CHECKSUMS is unchanged. Review the diff above, then run:"
-  info "  scripts/build-local.sh --accept-checksums=$(sum_of "$PROPOSED")"
+  info "  scripts/build-local.sh --accept-checksums=$(sum_of "$MERGED")"
   exit 0
 fi
 

@@ -54,6 +54,27 @@ case_file "engine dir: doc link outside a fetch"        0 wasm/gs/g.js 'var d = 
 case_file "// comment without a quote is not a URL"     0 assets/c.js 'var x = 1; //evil.example/not-a-url'
 case_file "inline script without URLs"                  0 extra.html '<script>console.log(1)</script>'
 
+# --- F2 review findings: evasions of the first scanner (all must fail) ---
+case_file "uppercase scheme HTTPS://"                   1 extra.html '<script src="HTTPS://evil.test/x.js"></script>'
+case_file "uppercase scheme in JS string"               1 assets/b.js 'const u = "HTTPS://evil.test/x.js";'
+case_file "JSON-escaped slashes (https)"                1 assets/b.json '{"u":"https:\/\/evil.test\/x.js"}'
+case_file "JSON-escaped slashes (protocol-relative)"    1 assets/b.json '{"u":"\/\/evil.test\/x.js"}'
+case_file "<base href>"                                 1 extra.html '<base href="https://evil.test/">'
+case_file "<input type=image src>"                      1 extra.html '<input type="image" src="//evil.test/i.png">'
+case_file "<track src>"                                 1 extra.html '<video><track src="https://evil.test/t.vtt"></video>'
+case_file "<frame src>"                                 1 extra.html '<frameset><frame src="https://evil.test/f.html"></frameset>'
+case_file "<body background>"                           1 extra.html '<body background="https://evil.test/bg.png">'
+case_file "hex entity slashes in src"                   1 extra.html '<script src="https:&#x2F;&#x2F;evil.test/x.js"></script>'
+case_file "decimal entity slashes in src"               1 extra.html '<img src="https:&#47;&#47;evil.test/x.png">'
+case_file "named entity &sol; in src"                   1 extra.html '<img src="https:&sol;&sol;evil.test/x.png">'
+case_file "entity-quoted url() in style attr"           1 extra.html '<div style="background:url(&quot;//evil.test/i.png&quot;)"></div>'
+case_file "numeric-entity-quoted url() in style attr"   1 extra.html '<div style="background:url(&#34;//evil.test/i.png&#34;)"></div>'
+case_file "@import url( //h ) with inner spaces"        1 extra.html '<style>@import url( //evil.test/a.css );</style>'
+case_file "css file @import url( //h )"                 1 assets/s.css '@import url(   //evil.test/a.css   );'
+case_file "ld+json only in another attribute"           1 extra.html '<script data-note="ld+json">fetch("https://evil.test/x")</script>'
+case_file "type=text/javascript mentioning ld+json"     1 extra.html '<script data-type="type=application/ld+json">fetch("https://evil.test/x")</script>'
+case_file "<input> that is not an image is not a loader" 0 extra.html '<input type="text" value="https://evil.test/x">'
+
 # --- F3: allowlist strictness ---
 allow() { printf '%s\t%s\t%s%s\n' "$1" "$2" "test entry" "${3:+	$3}" > "$T/allow.txt"; }
 d="$(new_dist allow1)"; echo 'x("https://h.test/ok/a")' > "$d/assets/main-1.js"

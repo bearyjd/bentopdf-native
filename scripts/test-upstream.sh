@@ -60,9 +60,23 @@ tamper "unpatched file hidden by skip-worktree"    bash -c "echo evil >> c.txt; 
 tamper "unpatched tracked file edited"             bash -c "echo evil >> c.txt"
 R2="$(new_root wrongpin)"; printf '%040d\n' 1 > "$R2/UPSTREAM_COMMIT"
 check "verify rejects: wrong UPSTREAM_COMMIT pin" 1 "$(status_of verify "$R2" "$U")"
-check "verify: ignored build output is out of scope" 0 "$(
-  u="$T/up-ign"; cp -a "$U" "$u"; printf 'node_modules/\n' >> "$u/.git/info/exclude"; mkdir "$u/node_modules"; echo x > "$u/node_modules/x.js"
+check "verify: top-level node_modules/ and dist/ are out of scope (no ignore rule needed)" 0 "$(
+  u="$T/up-ign"; cp -a "$U" "$u"; mkdir "$u/node_modules" "$u/dist"; echo x > "$u/node_modules/x.js"; echo x > "$u/dist/x.js"
   status_of verify "$R" "$u")"
+# Ignore rules must not hide planted files (F1 review: .git/info/exclude, core.excludesFile, .gitignore).
+u="$T/up-exclude"; cp -a "$U" "$u"; printf '*.js\n' >> "$u/.git/info/exclude"; echo evil > "$u/planted.js"
+check "verify rejects: planted file hidden by .git/info/exclude" 1 "$(status_of verify "$R" "$u")"
+printf 'planted2.js\n' > "$T/global-excludes"; printf '[core]\n\texcludesFile = %s\n' "$T/global-excludes" > "$T/gitconfig-ex"
+u="$T/up-gex"; cp -a "$U" "$u"; echo evil > "$u/planted2.js"
+check "verify rejects: planted file hidden by core.excludesFile" 1 "$(GIT_CONFIG_GLOBAL="$T/gitconfig-ex" status_of verify "$R" "$u")"
+u="$T/up-gitignore"; cp -a "$U" "$u"; printf '*.js\n' > "$u/.gitignore"; echo evil > "$u/planted3.js"
+check "verify rejects: planted file hidden by an untracked .gitignore" 1 "$(status_of verify "$R" "$u")"
+u="$T/up-env"; cp -a "$U" "$u"; echo 'TOKEN=x' > "$u/.env.local"
+check "verify rejects: .env* file" 1 "$(status_of verify "$R" "$u")"
+check "  ... with the environment-file message" yes "$(err_has 'environment file')"
+u="$T/up-env2"; cp -a "$U" "$u"; printf '.env*\n' >> "$u/.git/info/exclude"; echo 'TOKEN=x' > "$u/.env"
+check "verify rejects: ignored .env file" 1 "$(status_of verify "$R" "$u")"
+check "  ... with the environment-file message" yes "$(err_has 'environment file')"
 
 # --- F1: SKIP_FETCH must not skip verification in build-local.sh ---------------
 bl() { # root dir  (SKIP_FETCH build; expected to stop before building anything)
@@ -89,4 +103,11 @@ R5="$(new_root f4b)"; printf '%040d\n' 2 > "$R5/UPSTREAM_COMMIT"
 U5="$T/fresh5/up"
 check "clone at the wrong commit fails" 1 "$(status_of fetch "$R5" "$U5")"
 check "wrong-commit clone leaves no directory behind" "" "$(ls -A "$T/fresh5" 2>/dev/null)"
+# Destination appears while cloning: must be refused, never nested. (A git shim creates it during "clone".)
+mkdir "$T/shim"; REALGIT="$(command -v git)"
+printf '#!/usr/bin/env bash\nif [ "${1:-}" = clone ] && [ -n "${RACE_DIR:-}" ]; then mkdir -p "$RACE_DIR"; fi\nexec %s "$@"\n' "$REALGIT" > "$T/shim/git"; chmod +x "$T/shim/git"
+U6="$T/fresh6/up"
+check "destination appearing during clone is refused" 1 "$(RACE_DIR="$U6" PATH="$T/shim:$PATH" status_of fetch "$R3" "$U6")"
+check "  ... and the clone was not nested into it" "" "$(ls -A "$U6" 2>/dev/null)"
+check "fetch-upstream.sh uses no GNU-only mv -T" 0 "$(grep -c -- 'mv -T' "$HERE/fetch-upstream.sh" || true)"
 exit "$FAILED"
